@@ -451,45 +451,53 @@ class OrientationDetector:
             client = self._get_client()
             b64_image = self._encode_image(image)
             
-            prompt = """Analyze this POLAROID photograph and determine its correct orientation.
+            prompt = """You are analyzing a POLAROID photograph to determine its correct orientation.
 
-MOST IMPORTANT RULE FOR POLAROIDS:
-Polaroid photos have a distinctive asymmetric white frame. The THICK white border (the widest white edge) 
-should ALWAYS be at the BOTTOM of the image when correctly oriented. This is the defining characteristic 
-of polaroid photos.
+CRITICAL RULE: Polaroids have ONE distinctive thick white border (the "signature strip") that MUST be at the BOTTOM when correctly oriented.
 
-Steps to determine orientation:
-1. First, identify the polaroid frame - look for the white borders around the photo content
-2. Find which side has the THICKEST white border - this is the "signature strip" of a polaroid
-3. The thick white border MUST be at the BOTTOM when correctly oriented
-4. If the thick border is on the left, rotate 90° clockwise
-5. If the thick border is on the right, rotate 270° clockwise (or 90° counter-clockwise)
-6. If the thick border is at the top, rotate 180°
-7. If the thick border is already at the bottom, no rotation needed
+STEP-BY-STEP ANALYSIS (do this carefully):
 
-Secondary cues (only use if polaroid frame is unclear):
-- People's faces should be upright
-- Text should be readable left-to-right
-- Horizon lines should be horizontal
+STEP 1: Identify all four white borders of the polaroid frame.
 
-Respond in JSON format only:
+STEP 2: MEASURE the relative width of each border:
+- Look at the TOP edge of the polaroid - how thick is the white border there?
+- Look at the BOTTOM edge - how thick is that white border?
+- Look at the LEFT edge - how thick?
+- Look at the RIGHT edge - how thick?
+
+STEP 3: Identify which ONE border is SIGNIFICANTLY THICKER than the others.
+- The thick border is typically 2-3x wider than the thin borders
+- It's where people write notes/dates on polaroids
+- The three thin borders are roughly equal width
+
+STEP 4: WHERE is the thick border currently located in the image?
+- TOP of the image?
+- BOTTOM of the image?
+- LEFT side of the image?
+- RIGHT side of the image?
+
+STEP 5: Determine rotation needed to move thick border to BOTTOM:
+- Thick border at BOTTOM → 0° (already correct)
+- Thick border at TOP → 180° rotation needed
+- Thick border on LEFT → 90° clockwise rotation needed
+- Thick border on RIGHT → 270° clockwise rotation needed
+
+ALSO CHECK: Are people upside down? Is text upside down? This confirms your border analysis.
+
+Respond in JSON format:
 {
+    "thick_border_current_location": "top/bottom/left/right",
+    "border_width_analysis": "Brief description of which border is thickest",
+    "people_orientation": "upright/upside_down/sideways/no_people",
     "needs_rotation": true/false,
     "rotation_degrees": 0/90/180/270,
     "confidence": "high/medium/low",
-    "thick_border_location": "top/bottom/left/right",
-    "description": "Brief explanation focusing on where the thick polaroid border is located"
-}
-
-IMPORTANT: rotation_degrees is the CLOCKWISE rotation needed to correct the image.
-- 0 = thick border is at bottom (correct orientation)
-- 90 = thick border is on the left → rotate 90° clockwise to move it to bottom
-- 180 = thick border is at top → rotate 180° to flip it to bottom
-- 270 = thick border is on the right → rotate 270° clockwise to move it to bottom"""
+    "description": "Explanation of your analysis"
+}"""
 
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
-                max_tokens=512,
+                max_tokens=1024,
                 messages=[{
                     "role": "user",
                     "content": [
@@ -521,11 +529,23 @@ IMPORTANT: rotation_degrees is the CLOCKWISE rotation needed to correct the imag
                 
                 data = json.loads(json_str.strip())
                 
+                # Build detailed description from analysis
+                thick_loc = data.get("thick_border_current_location", "unknown")
+                border_analysis = data.get("border_width_analysis", "")
+                people_orient = data.get("people_orientation", "")
+                base_desc = data.get("description", "")
+                
+                description = f"Thick border at {thick_loc}. {border_analysis}"
+                if people_orient and people_orient != "no_people":
+                    description += f" People are {people_orient}."
+                if base_desc:
+                    description += f" {base_desc}"
+                
                 return OrientationResult(
                     needs_rotation=data.get("needs_rotation", False),
                     rotation_degrees=data.get("rotation_degrees", 0),
                     confidence=data.get("confidence", "low"),
-                    description=data.get("description", ""),
+                    description=description,
                     success=True
                 )
                 
