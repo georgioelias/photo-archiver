@@ -449,33 +449,30 @@ class OrientationDetector:
             client = self._get_client()
             b64_image = self._encode_image(image)
             
-            prompt = """Analyze this scanned POLAROID photograph and determine the correct orientation.
+            prompt = """Look at this polaroid photo and find the THICK WHITE BORDER (wider than other edges).
 
-This is a polaroid photo being held by someone's hand during scanning. 
+A polaroid has 4 white borders but ONE is THICKER - this thick border should be at the BOTTOM.
 
-TO FIND THE CORRECT ORIENTATION, use these clues together:
+STEP 1: Find which edge has the THICKEST white border (measure visually - one edge is noticeably wider)
+STEP 2: Determine what clockwise rotation puts that edge at the BOTTOM
 
-1. **POLAROID FRAME**: The thick white border of a polaroid is ALWAYS at the BOTTOM when correctly oriented
-2. **HAND/FINGER**: The person holding the photo typically holds it from the BOTTOM, so the hand should end up at the BOTTOM
-3. **PHOTO CONTENT**: The subject in the photo should look natural (sky at top if visible, people upright, etc.)
+CLOCKWISE ROTATION GUIDE (imagine rotating the image like turning a steering wheel to the right):
+- If thick border is at BOTTOM → 0° (no rotation needed)
+- If thick border is on LEFT edge → 90° clockwise (left edge moves to bottom)
+- If thick border is at TOP → 180° (top flips to bottom)  
+- If thick border is on RIGHT edge → 270° clockwise (right edge moves to bottom)
 
-All three clues should AGREE. The thick white polaroid border and the hand holding it should both be at the BOTTOM of the correctly oriented image.
+LEFT means the left side of the image as YOU see it (west side).
+RIGHT means the right side of the image as YOU see it (east side).
 
-Look at where the THICK WHITE BORDER is currently located, and rotate so it ends up at the BOTTOM.
-
-Respond in JSON format only:
+Respond ONLY with JSON:
 {
     "needs_rotation": true/false,
     "rotation_degrees": 0/90/180/270,
     "confidence": "high/medium/low",
-    "description": "Explain where the thick white border is and what rotation puts it at bottom"
-}
-
-rotation_degrees = CLOCKWISE rotation needed to put thick white border at BOTTOM:
-- 0 = thick white border is already at bottom
-- 90 = thick white border is on the left, rotate 90° clockwise
-- 180 = thick white border is at top, rotate 180°
-- 270 = thick white border is on the right, rotate 270° clockwise"""
+    "thick_border_location": "bottom/left/top/right",
+    "description": "brief explanation"
+}"""
 
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
