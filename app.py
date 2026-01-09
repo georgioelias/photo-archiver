@@ -229,7 +229,9 @@ def init_session_state():
         st.session_state.auto_config = None
 
 
-def process_image(image: np.ndarray, config: Dict[str, Any], api_key: str = None) -> Tuple[np.ndarray, List[Dict]]:
+def process_image(image: np.ndarray, config: Dict[str, Any], api_key: str = None, 
+                  pipeline_order: List[str] = None, 
+                  enable_orientation: bool = False) -> Tuple[np.ndarray, List[Dict], Any]:
     """
     Run the complete processing pipeline on an image.
     
@@ -237,157 +239,192 @@ def process_image(image: np.ndarray, config: Dict[str, Any], api_key: str = None
         image: BGR input image
         config: Processing configuration
         api_key: Optional API key for AI-powered enhancements
+        pipeline_order: Optional list of step keys in execution order
+        enable_orientation: Whether AI orientation detection is enabled
         
     Returns:
-        Tuple of (processed_image, pipeline_results)
+        Tuple of (processed_image, pipeline_results, orientation_result)
     """
     pipeline_results = []
     current_image = image.copy()
+    orientation_result = None
     
-    # Step 1: Glare Removal
-    if config.get('glare', {}).get('enabled', True):
-        try:
-            start_time = time.time()
-            glare_remover = GlareRemover(config.get('glare', {}))
-            result = glare_remover.process(current_image)
-            current_image = result.image
-            
-            pipeline_results.append({
-                'step': 'Glare Removal',
-                'time': time.time() - start_time,
-                'status': 'completed',
-                'details': f"Detected {result.regions_detected} regions ({result.coverage_percent:.1f}% coverage)",
-                'method': result.method_used,
-                'before': image.copy(),
-                'after': current_image.copy()
-            })
-        except Exception as e:
-            pipeline_results.append({
-                'step': 'Glare Removal',
-                'time': 0,
-                'status': 'error',
-                'details': str(e)
-            })
+    # Default order if not specified
+    if pipeline_order is None:
+        pipeline_order = ['orientation', 'glare', 'perspective', 'color', 'enhance', 'polaroid']
     
-    # Step 2: Perspective Correction
-    if config.get('perspective', {}).get('enabled', True):
-        try:
-            start_time = time.time()
-            perspective_corrector = PerspectiveCorrector(config.get('perspective', {}))
-            result = perspective_corrector.process(current_image)
-            
-            before_perspective = current_image.copy()
-            current_image = result.image
-            
-            pipeline_results.append({
-                'step': 'Perspective Correction',
-                'time': time.time() - start_time,
-                'status': 'completed',
-                'details': f"Method: {result.method_used}, Confidence: {result.confidence:.2f}",
-                'method': result.method_used,
-                'before': before_perspective,
-                'after': current_image.copy()
-            })
-        except Exception as e:
-            pipeline_results.append({
-                'step': 'Perspective Correction',
-                'time': 0,
-                'status': 'error',
-                'details': str(e)
-            })
-    
-    # Step 3: Color Correction
-    if config.get('color', {}).get('enabled', True):
-        try:
-            start_time = time.time()
-            color_corrector = ColorCorrector(config.get('color', {}))
-            result = color_corrector.process(current_image)
-            
-            before_color = current_image.copy()
-            current_image = result.image
-            
-            pipeline_results.append({
-                'step': 'Color Correction',
-                'time': time.time() - start_time,
-                'status': 'completed',
-                'details': f"WB: {result.white_balance_method}, Cast removed: {result.color_cast_corrected}",
-                'method': result.white_balance_method,
-                'before': before_color,
-                'after': current_image.copy()
-            })
-        except Exception as e:
-            pipeline_results.append({
-                'step': 'Color Correction',
-                'time': 0,
-                'status': 'error',
-                'details': str(e)
-            })
-    
-    # Step 4: Enhancement (AI-powered recommendations)
-    if config.get('enhancement', {}).get('enabled', True):
-        try:
-            start_time = time.time()
-            enhancer = ImageEnhancer(config.get('enhancement', {}))
-            result = enhancer.process(current_image, api_key=api_key)
-            
-            before_enhance = current_image.copy()
-            current_image = result.image
-            
-            # Build details string
-            details = f"Denoise: {result.denoise_applied}, Sharpen: {result.sharpen_applied}"
-            if result.ai_recommendations:
-                details += f" | AI: {result.ai_recommendations}"
-            
-            pipeline_results.append({
-                'step': 'Enhancement',
-                'time': time.time() - start_time,
-                'status': 'completed',
-                'details': details,
-                'method': f"D:{result.denoise_applied} S:{result.sharpen_applied}",
-                'before': before_enhance,
-                'after': current_image.copy()
-            })
-        except Exception as e:
-            pipeline_results.append({
-                'step': 'Enhancement',
-                'time': 0,
-                'status': 'error',
-                'details': str(e)
-            })
-    
-    # Step 5: Polaroid Content Crop (optional)
-    if config.get('polaroid_crop', {}).get('enabled', False):
-        try:
-            start_time = time.time()
-            cropper = PolaroidCropper(config.get('polaroid_crop', {}))
-            result = cropper.process(current_image)
-            
-            before_crop = current_image.copy()
-            
-            if result.border_detected:
+    # Process steps in the specified order
+    for step_key in pipeline_order:
+        before_step = current_image.copy()
+        
+        # AI Orientation Detection
+        if step_key == 'orientation' and enable_orientation and api_key:
+            try:
+                start_time = time.time()
+                detector = OrientationDetector(api_key)
+                orientation_result = detector.detect_orientation(current_image)
+                
+                if orientation_result.success and orientation_result.needs_rotation:
+                    current_image = detector.rotate_image(current_image, orientation_result.rotation_degrees)
+                    
+                    pipeline_results.append({
+                        'step': 'Orientation Correction',
+                        'time': time.time() - start_time,
+                        'status': 'completed',
+                        'details': f"Rotated {orientation_result.rotation_degrees}° ({orientation_result.confidence} confidence)",
+                        'method': 'AI Detection',
+                        'before': before_step,
+                        'after': current_image.copy()
+                    })
+                elif orientation_result.success:
+                    pipeline_results.append({
+                        'step': 'Orientation Correction',
+                        'time': time.time() - start_time,
+                        'status': 'completed',
+                        'details': f"No rotation needed ({orientation_result.confidence} confidence)",
+                        'method': 'AI Detection',
+                        'before': before_step,
+                        'after': current_image.copy()
+                    })
+            except Exception as e:
+                pipeline_results.append({
+                    'step': 'Orientation Correction',
+                    'time': 0,
+                    'status': 'error',
+                    'details': str(e)
+                })
+            continue
+        
+        if step_key == 'glare' and config.get('glare', {}).get('enabled', True):
+            try:
+                start_time = time.time()
+                glare_remover = GlareRemover(config.get('glare', {}))
+                result = glare_remover.process(current_image)
                 current_image = result.image
-                crop_details = f"Content extracted ({result.content_ratio*100:.1f}% of original) using {result.detection_method}"
-            else:
-                crop_details = "No polaroid border detected - image unchanged"
-            
-            pipeline_results.append({
-                'step': 'Polaroid Crop',
-                'time': time.time() - start_time,
-                'status': 'completed',
-                'details': crop_details,
-                'method': result.detection_method if result.border_detected else 'none',
-                'before': before_crop,
-                'after': current_image.copy()
-            })
-        except Exception as e:
-            pipeline_results.append({
-                'step': 'Polaroid Crop',
-                'time': 0,
-                'status': 'error',
-                'details': str(e)
-            })
+                
+                pipeline_results.append({
+                    'step': 'Glare Removal',
+                    'time': time.time() - start_time,
+                    'status': 'completed',
+                    'details': f"Detected {result.regions_detected} regions ({result.coverage_percent:.1f}% coverage)",
+                    'method': result.method_used,
+                    'before': before_step,
+                    'after': current_image.copy()
+                })
+            except Exception as e:
+                pipeline_results.append({
+                    'step': 'Glare Removal',
+                    'time': 0,
+                    'status': 'error',
+                    'details': str(e)
+                })
+        
+        elif step_key == 'perspective' and config.get('perspective', {}).get('enabled', True):
+            try:
+                start_time = time.time()
+                perspective_corrector = PerspectiveCorrector(config.get('perspective', {}))
+                result = perspective_corrector.process(current_image)
+                current_image = result.image
+                
+                pipeline_results.append({
+                    'step': 'Perspective Correction',
+                    'time': time.time() - start_time,
+                    'status': 'completed',
+                    'details': f"Method: {result.method_used}, Confidence: {result.confidence:.2f}",
+                    'method': result.method_used,
+                    'before': before_step,
+                    'after': current_image.copy()
+                })
+            except Exception as e:
+                pipeline_results.append({
+                    'step': 'Perspective Correction',
+                    'time': 0,
+                    'status': 'error',
+                    'details': str(e)
+                })
+        
+        elif step_key == 'color' and config.get('color', {}).get('enabled', True):
+            try:
+                start_time = time.time()
+                color_corrector = ColorCorrector(config.get('color', {}))
+                result = color_corrector.process(current_image)
+                current_image = result.image
+                
+                pipeline_results.append({
+                    'step': 'Color Correction',
+                    'time': time.time() - start_time,
+                    'status': 'completed',
+                    'details': f"WB: {result.white_balance_method}, Cast removed: {result.color_cast_corrected}",
+                    'method': result.white_balance_method,
+                    'before': before_step,
+                    'after': current_image.copy()
+                })
+            except Exception as e:
+                pipeline_results.append({
+                    'step': 'Color Correction',
+                    'time': 0,
+                    'status': 'error',
+                    'details': str(e)
+                })
+        
+        elif step_key == 'enhance' and config.get('enhancement', {}).get('enabled', True):
+            try:
+                start_time = time.time()
+                enhancer = ImageEnhancer(config.get('enhancement', {}))
+                result = enhancer.process(current_image, api_key=api_key)
+                current_image = result.image
+                
+                details = f"Denoise: {result.denoise_applied}, Sharpen: {result.sharpen_applied}"
+                if result.ai_recommendations:
+                    details += f" | AI: {result.ai_recommendations}"
+                
+                pipeline_results.append({
+                    'step': 'Enhancement',
+                    'time': time.time() - start_time,
+                    'status': 'completed',
+                    'details': details,
+                    'method': f"D:{result.denoise_applied} S:{result.sharpen_applied}",
+                    'before': before_step,
+                    'after': current_image.copy()
+                })
+            except Exception as e:
+                pipeline_results.append({
+                    'step': 'Enhancement',
+                    'time': 0,
+                    'status': 'error',
+                    'details': str(e)
+                })
+        
+        elif step_key == 'polaroid' and config.get('polaroid_crop', {}).get('enabled', False):
+            try:
+                start_time = time.time()
+                cropper = PolaroidCropper(config.get('polaroid_crop', {}))
+                result = cropper.process(current_image)
+                
+                if result.border_detected:
+                    current_image = result.image
+                    crop_details = f"Content extracted ({result.content_ratio*100:.1f}% of original) using {result.detection_method}"
+                else:
+                    crop_details = "No polaroid border detected - image unchanged"
+                
+                pipeline_results.append({
+                    'step': 'Polaroid Crop',
+                    'time': time.time() - start_time,
+                    'status': 'completed',
+                    'details': crop_details,
+                    'method': result.detection_method if result.border_detected else 'none',
+                    'before': before_step,
+                    'after': current_image.copy()
+                })
+            except Exception as e:
+                pipeline_results.append({
+                    'step': 'Polaroid Crop',
+                    'time': 0,
+                    'status': 'error',
+                    'details': str(e)
+                })
     
-    return current_image, pipeline_results
+    return current_image, pipeline_results, orientation_result
 
 
 def run_compression_analysis(image: np.ndarray, 
@@ -737,76 +774,70 @@ def main():
         
         st.markdown("---")
         st.markdown("### 🔄 Processing Pipeline")
-        st.markdown("**Toggle steps on/off to customize the processing:**")
+        st.markdown("**Enable steps and set their order:**")
         
-        # Visual pipeline steps with better organization
-        pipeline_steps = []
+        # Define all available steps with their info
+        all_steps = {
+            'orientation': {'name': '🔄 AI Orientation', 'default_order': 1, 'default_enabled': True,
+                           'help': 'Use Claude AI to detect and correct image rotation.'},
+            'glare': {'name': '✨ Glare Removal', 'default_order': 2, 'default_enabled': True,
+                     'help': 'Remove specular highlights and reflections from laminated surfaces.'},
+            'perspective': {'name': '📐 Perspective', 'default_order': 3, 'default_enabled': True,
+                           'help': 'Correct perspective distortion from angled photos.'},
+            'color': {'name': '🎨 Color Correction', 'default_order': 4, 'default_enabled': True,
+                     'help': 'Fix white balance, remove color casts, and restore faded colors.'},
+            'enhance': {'name': '🔧 Enhancement', 'default_order': 5, 'default_enabled': True,
+                       'help': 'Denoising, sharpening, and contrast adjustment.'},
+            'polaroid': {'name': '📷 Polaroid Crop', 'default_order': 6, 'default_enabled': False,
+                        'help': 'Extract photo content from inside the polaroid frame.'},
+        }
         
-        # Step 0: Orientation Detection
-        enable_orientation = st.checkbox(
-            "🔄 **Step 0: AI Orientation Detection**", 
-            value=True,
-            help="Use Claude AI to detect and correct image rotation. Runs first to ensure proper orientation."
-        )
-        if enable_orientation:
-            pipeline_steps.append("🔄 Orientation")
+        # Step controls with order selection
+        step_settings = {}
         
-        st.markdown("---")
+        for step_key, step_info in all_steps.items():
+            col1, col2 = st.columns([3, 1])
+            with col1:
+                enabled = st.checkbox(
+                    step_info['name'],
+                    value=step_info['default_enabled'],
+                    help=step_info['help'],
+                    key=f"enable_{step_key}"
+                )
+            with col2:
+                order = st.selectbox(
+                    "Order",
+                    options=list(range(1, 7)),
+                    index=step_info['default_order'] - 1,
+                    key=f"order_{step_key}",
+                    label_visibility="collapsed"
+                )
+            
+            step_settings[step_key] = {'enabled': enabled, 'order': order, 'name': step_info['name']}
         
-        # Step 1: Glare Removal
-        enable_glare = st.checkbox(
-            "✨ **Step 1: Glare Removal**", 
-            value=True,
-            help="Remove specular highlights and reflections from laminated surfaces. Detects bright, low-saturation regions."
-        )
-        if enable_glare:
-            pipeline_steps.append("✨ Glare Removal")
+        # Extract individual enable flags for compatibility
+        enable_orientation = step_settings['orientation']['enabled']
+        enable_glare = step_settings['glare']['enabled']
+        enable_perspective = step_settings['perspective']['enabled']
+        enable_color = step_settings['color']['enabled']
+        enable_enhance = step_settings['enhance']['enabled']
+        enable_polaroid_crop = step_settings['polaroid']['enabled']
         
-        # Step 2: Perspective Correction
-        enable_perspective = st.checkbox(
-            "📐 **Step 2: Perspective Correction**", 
-            value=True,
-            help="Correct perspective distortion from angled photos. Finds document edges and applies perspective transform."
-        )
-        if enable_perspective:
-            pipeline_steps.append("📐 Perspective")
+        # Build ordered pipeline - sort by order, filter enabled
+        enabled_steps = [(k, v) for k, v in step_settings.items() if v['enabled']]
+        ordered_pipeline = sorted(enabled_steps, key=lambda x: x[1]['order'])
         
-        # Step 3: Color Correction
-        enable_color = st.checkbox(
-            "🎨 **Step 3: Color Correction**", 
-            value=True,
-            help="Fix white balance, remove color casts, and restore faded colors. Applies CLAHE for contrast."
-        )
-        if enable_color:
-            pipeline_steps.append("🎨 Color Correction")
+        # Store pipeline order in session state for use during processing
+        st.session_state.pipeline_order = [step[0] for step in ordered_pipeline]
         
-        # Step 4: Enhancement
-        enable_enhance = st.checkbox(
-            "🔧 **Step 4: Enhancement**", 
-            value=True,
-            help="Optional denoising, sharpening, and contrast adjustment. Uses AI recommendations when available."
-        )
-        if enable_enhance:
-            pipeline_steps.append("🔧 Enhancement")
-        
-        # Step 5: Polaroid Crop (optional)
-        st.markdown("---")
-        enable_polaroid_crop = st.checkbox(
-            "📷 **Step 5: Polaroid Content Crop**", 
-            value=False,
-            help="Extract the photo content from inside the polaroid frame. Removes white border and surrounding area."
-        )
-        if enable_polaroid_crop:
-            pipeline_steps.append("📷 Polaroid Crop")
-        
-        # Visual pipeline preview
-        if pipeline_steps:
+        # Visual pipeline preview showing execution order
+        if ordered_pipeline:
             st.markdown("---")
-            st.markdown("**📋 Active Pipeline:**")
-            for i, step in enumerate(pipeline_steps):
-                st.markdown(f"{i+1}. {step}")
+            st.markdown("**📋 Execution Order:**")
+            for i, (step_key, step_data) in enumerate(ordered_pipeline):
+                st.markdown(f"{i+1}. {step_data['name']}")
         else:
-            st.warning("⚠️ No steps enabled! Enable at least one step to process images.")
+            st.warning("⚠️ No steps enabled!")
         
         st.markdown("---")
         st.markdown("### Compression Targets")
@@ -900,33 +931,12 @@ def main():
                 progress_bar = st.progress(0)
                 status_text = st.empty()
                 
-                # Store the working image (may be rotated)
                 working_image = original_image.copy()
-                orientation_result = None
                 
-                # Step 0: AI Orientation Detection
-                if enable_orientation and api_key:
-                    status_text.text("🔄 Detecting image orientation with AI...")
-                    progress_bar.progress(5)
-                    
-                    try:
-                        detector = OrientationDetector(api_key)
-                        orientation_result = detector.detect_orientation(working_image)
-                        
-                        if orientation_result.success and orientation_result.needs_rotation:
-                            working_image = detector.rotate_image(working_image, orientation_result.rotation_degrees)
-                            st.session_state.orientation_result = orientation_result
-                            st.info(f"🔄 **Orientation Corrected**: Rotated {orientation_result.rotation_degrees}° clockwise. {orientation_result.description}")
-                        elif orientation_result.success:
-                            st.session_state.orientation_result = orientation_result
-                    except Exception as e:
-                        st.warning(f"Orientation detection failed: {e}")
-                
-                # Re-analyze with corrected orientation
+                # Build configuration using auto-config
                 auto_config = AutoConfig(working_image)
                 st.session_state.auto_config = auto_config
                 
-                # Build configuration
                 config = {
                     'glare': {
                         **auto_config.get_glare_config(),
@@ -958,19 +968,23 @@ def main():
                 status_text.text("Processing image...")
                 progress_bar.progress(15)
                 
-                processed_image, pipeline_results = process_image(working_image, config, api_key=api_key)
+                # Get custom pipeline order from session state
+                pipeline_order = st.session_state.get('pipeline_order', None)
                 
-                # Add orientation step to pipeline results if rotation was applied
-                if orientation_result and orientation_result.needs_rotation:
-                    pipeline_results.insert(0, {
-                        'step': 'Orientation Correction',
-                        'time': 0.5,
-                        'status': 'completed',
-                        'details': f"Rotated {orientation_result.rotation_degrees}° ({orientation_result.confidence} confidence)",
-                        'method': 'AI Detection',
-                        'before': original_image.copy(),
-                        'after': working_image.copy()
-                    })
+                # Process image with all steps in custom order
+                processed_image, pipeline_results, orientation_result = process_image(
+                    working_image, config, 
+                    api_key=api_key, 
+                    pipeline_order=pipeline_order,
+                    enable_orientation=enable_orientation
+                )
+                
+                # Store orientation result if available
+                if orientation_result:
+                    st.session_state.orientation_result = orientation_result
+                    if orientation_result.needs_rotation:
+                        st.info(f"🔄 **Orientation Corrected**: Rotated {orientation_result.rotation_degrees}° clockwise. {orientation_result.description}")
+                
                 st.session_state.final_image = processed_image
                 st.session_state.pipeline_results = pipeline_results
                 
