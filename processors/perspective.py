@@ -879,96 +879,129 @@ class PolaroidCropper:
     
     def _detect_by_white_border_scan(self, image: np.ndarray, gray: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         """
-        Detect content by scanning for white borders from each edge.
-        Specifically optimized for polaroid-style white frames.
-        
-        This method scans brightness profiles from each edge inward,
-        looking for the transition from bright border to darker content.
+        Detect polaroid content in TWO phases:
+        1. Find the white polaroid frame in the scene (may have background like table, hands)
+        2. Find the photo content inside that white frame
         """
         h, w = gray.shape
         
-        # Calculate brightness threshold based on border samples
-        border_sample_size = min(h, w) // 15
+        # PHASE 1: Find the white polaroid frame region
+        # Threshold to find white areas (polaroid frame is white, typically >180)
+        _, white_mask = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
         
-        # Sample the borders to determine their brightness
-        top_brightness = np.mean(gray[:border_sample_size, :])
-        bottom_brightness = np.mean(gray[-border_sample_size:, :])
-        left_brightness = np.mean(gray[:, :border_sample_size])
-        right_brightness = np.mean(gray[:, -border_sample_size:])
+        # Clean up the mask
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel)
+        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel)
         
-        avg_border_brightness = np.mean([top_brightness, bottom_brightness, left_brightness, right_brightness])
+        # Find contours of white regions
+        contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Check if we actually have white-ish borders
-        if avg_border_brightness < 150:  # Not a white border
+        if not contours:
             return None
         
-        # Sample center to get content brightness
-        center_h, center_w = h // 2, w // 2
-        center_region = gray[center_h - h//8:center_h + h//8, center_w - w//8:center_w + w//8]
-        content_brightness = np.mean(center_region)
+        # Find the largest white rectangular region (the polaroid frame)
+        best_frame = None
+        best_area = 0
         
-        # Need significant brightness difference
-        brightness_diff = avg_border_brightness - content_brightness
-        if brightness_diff < 30:  # Not enough contrast
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if area < h * w * 0.05:  # Too small
+                continue
+            
+            # Get bounding rect
+            x, y, cw, ch = cv2.boundingRect(cnt)
+            rect_area = cw * ch
+            
+            # Check rectangularity
+            fill_ratio = area / rect_area if rect_area > 0 else 0
+            
+            # Polaroid frames are fairly rectangular (fill ratio > 0.6)
+            if fill_ratio > 0.5 and area > best_area:
+                # Check aspect ratio (polaroids are roughly 1:1.2)
+                aspect = max(cw, ch) / min(cw, ch) if min(cw, ch) > 0 else 10
+                if aspect < 2.5:  # Not too elongated
+                    best_area = area
+                    best_frame = (x, y, cw, ch)
+        
+        if best_frame is None:
             return None
         
-        # Adaptive threshold - look for where brightness drops significantly
-        brightness_threshold = avg_border_brightness - brightness_diff * 0.4
+        fx, fy, fw, fh = best_frame
         
-        # Scan from each edge to find where white ends
-        min_border = self.config["min_border_width"]
+        # PHASE 2: Find the photo content inside the polaroid frame
+        # Extract the frame region
+        frame_region = gray[fy:fy+fh, fx:fx+fw]
+        frame_h, frame_w = frame_region.shape
+        
+        if frame_h < 50 or frame_w < 50:
+            return None
+        
+        # The white border brightness
+        border_sample = min(frame_h, frame_w) // 10
+        border_brightness = np.mean([
+            np.mean(frame_region[:border_sample, :]),  # top
+            np.mean(frame_region[-border_sample:, :]),  # bottom
+            np.mean(frame_region[:, :border_sample]),  # left
+            np.mean(frame_region[:, -border_sample:])   # right
+        ])
+        
+        # Content is darker than the white border
+        # Use a threshold that's lower than the border
+        content_threshold = border_brightness - 50
+        
+        # Scan from each edge inward to find where content starts
         margin = self.config["margin_pixels"]
         
-        # Scan from LEFT edge
-        left = 0
-        for col in range(min_border, w // 3):
-            col_slice = gray[:, col]
-            # Check if majority of pixels in this column are below threshold (content)
-            dark_ratio = np.mean(col_slice < brightness_threshold)
-            if dark_ratio > 0.5:
-                left = col + margin
+        # Find left boundary within frame
+        inner_left = 0
+        for col in range(frame_w // 3):
+            col_slice = frame_region[:, col]
+            if np.mean(col_slice < content_threshold) > 0.3:
+                inner_left = col + margin
                 break
         
-        # Scan from RIGHT edge
-        right = w
-        for col in range(w - min_border - 1, 2 * w // 3, -1):
-            col_slice = gray[:, col]
-            dark_ratio = np.mean(col_slice < brightness_threshold)
-            if dark_ratio > 0.5:
-                right = col - margin
+        # Find right boundary
+        inner_right = frame_w
+        for col in range(frame_w - 1, 2 * frame_w // 3, -1):
+            col_slice = frame_region[:, col]
+            if np.mean(col_slice < content_threshold) > 0.3:
+                inner_right = col - margin
                 break
         
-        # Scan from TOP edge
-        top = 0
-        for row in range(min_border, h // 3):
-            row_slice = gray[row, :]
-            dark_ratio = np.mean(row_slice < brightness_threshold)
-            if dark_ratio > 0.5:
-                top = row + margin
+        # Find top boundary
+        inner_top = 0
+        for row in range(frame_h // 3):
+            row_slice = frame_region[row, :]
+            if np.mean(row_slice < content_threshold) > 0.3:
+                inner_top = row + margin
                 break
         
-        # Scan from BOTTOM edge
-        bottom = h
-        for row in range(h - min_border - 1, 2 * h // 3, -1):
-            row_slice = gray[row, :]
-            dark_ratio = np.mean(row_slice < brightness_threshold)
-            if dark_ratio > 0.5:
-                bottom = row - margin
+        # Find bottom boundary (polaroids have thicker bottom border)
+        inner_bottom = frame_h
+        for row in range(frame_h - 1, frame_h // 2, -1):
+            row_slice = frame_region[row, :]
+            if np.mean(row_slice < content_threshold) > 0.3:
+                inner_bottom = row - margin
                 break
         
-        # Validate the detected region
-        content_w = right - left
-        content_h = bottom - top
+        # Calculate absolute coordinates
+        abs_left = fx + inner_left
+        abs_top = fy + inner_top
+        abs_right = fx + inner_right
+        abs_bottom = fy + inner_bottom
         
-        if content_w > w * 0.3 and content_h > h * 0.3 and content_w < w * 0.95 and content_h < h * 0.95:
-            # Ensure we're not including any white border
-            # Do a final refinement pass
-            left, top, right, bottom = self._refine_boundaries(gray, left, top, right, bottom, brightness_threshold)
-            
-            content_w = right - left
-            content_h = bottom - top
-            
-            return (left, top, content_w, content_h)
+        # Refine boundaries to remove any remaining white
+        abs_left, abs_top, abs_right, abs_bottom = self._refine_boundaries(
+            gray, abs_left, abs_top, abs_right, abs_bottom, content_threshold + 20
+        )
+        
+        content_w = abs_right - abs_left
+        content_h = abs_bottom - abs_top
+        
+        # Validate
+        if content_w > 50 and content_h > 50:
+            return (abs_left, abs_top, content_w, content_h)
         
         return None
     
