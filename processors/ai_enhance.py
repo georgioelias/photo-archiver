@@ -449,37 +449,39 @@ class OrientationDetector:
             client = self._get_client()
             b64_image = self._encode_image(image)
             
-            prompt = """Analyze this scanned photograph (likely a polaroid or laminated photo) and determine if it needs rotation correction.
+            prompt = """Analyze this scanned photograph (likely a polaroid being held) and determine the CORRECT orientation.
 
-This is a POLAROID or physical photo being held/scanned. Key orientation clues:
+PRIORITY ORDER FOR DETERMINING CORRECT ORIENTATION:
 
-MOST IMPORTANT CLUES:
-1. **HAND/FINGER POSITION**: If there's a hand or fingers holding the photo, they should be at the BOTTOM of the correctly oriented image (people hold photos from below)
-2. **POLAROID WHITE BORDER**: Polaroid photos have a THICKER white border at the bottom. The thicker white edge = BOTTOM of the photo
-3. **The actual photo content** should have the subject matter correctly oriented
+**#1 HIGHEST PRIORITY - THE PHOTO CONTENT ITSELF:**
+Look at what the photograph is showing and orient it naturally:
+- SKY, clouds, ceiling, roof structures → should be at the TOP
+- GROUND, floor, base of objects → should be at the BOTTOM  
+- PEOPLE should be upright (heads at top, feet at bottom)
+- BUILDINGS should be vertical (roof at top, foundation at bottom)
+- VEHICLES (cars, trains, etc.) should be upright on their wheels
+- TEXT in the photo should be readable left-to-right
+- HORIZON LINE should be horizontal
 
-Other visual cues:
-- Text should be readable left-to-right
-- People's faces and bodies should be upright
-- Horizon lines should be horizontal
-- Buildings should be vertical
-- Sky should be at the top
+**#2 SECONDARY CLUES (use only if photo content is ambiguous):**
+- Polaroid photos have a thicker white border which is typically at the bottom
+- Hands/fingers holding the photo are usually at the bottom
 
-Determine the rotation needed to make the image correctly oriented.
+IMPORTANT: The photo CONTENT orientation matters most! A hand might be holding the photo sideways or upside-down during scanning - ignore this if the photo content clearly indicates a different orientation.
 
 Respond in JSON format only:
 {
     "needs_rotation": true/false,
     "rotation_degrees": 0/90/180/270,
     "confidence": "high/medium/low",
-    "description": "Brief explanation of why rotation is or isn't needed"
+    "description": "Brief explanation based on photo CONTENT"
 }
 
-IMPORTANT: rotation_degrees should be the CLOCKWISE rotation needed to correct the image.
-- 0 = image is correctly oriented (hand at bottom, thick polaroid border at bottom)
-- 90 = rotate 90° clockwise to fix
-- 180 = image is upside down, rotate 180° to fix
-- 270 = rotate 270° clockwise (or 90° counter-clockwise) to fix"""
+rotation_degrees = CLOCKWISE rotation needed:
+- 0 = already correct
+- 90 = rotate 90° clockwise
+- 180 = upside down, rotate 180°
+- 270 = rotate 270° clockwise (90° counter-clockwise)"""
 
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
