@@ -55,6 +55,7 @@ class GlareRemover:
     def detect_glare_regions(self, image: np.ndarray) -> Tuple[np.ndarray, float, int]:
         """
         Detect glare/specular highlight regions in the image.
+        Carefully distinguishes actual glare from polaroid white frames.
         
         Args:
             image: BGR input image
@@ -62,6 +63,8 @@ class GlareRemover:
         Returns:
             Tuple of (glare_mask, severity_score, num_regions)
         """
+        h, w = image.shape[:2]
+        
         # Convert to LAB color space
         lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
         l_channel = lab[:, :, 0]
@@ -96,9 +99,20 @@ class GlareRemover:
         # Find contours to count regions and filter by size
         contours, _ = cv2.findContours(glare_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         
-        # Filter small regions
+        # Filter small regions AND filter out polaroid frame-like regions
         min_area = self.config["min_glare_area"]
-        valid_contours = [c for c in contours if cv2.contourArea(c) >= min_area]
+        valid_contours = []
+        
+        for c in contours:
+            area = cv2.contourArea(c)
+            if area < min_area:
+                continue
+            
+            # Check if this region is likely a polaroid frame (not glare)
+            if self._is_likely_polaroid_frame(c, image, h, w):
+                continue
+            
+            valid_contours.append(c)
         
         # Create cleaned mask
         cleaned_mask = np.zeros_like(glare_mask)
@@ -113,6 +127,90 @@ class GlareRemover:
         severity = min(coverage * 10, 1.0)  # Scale coverage to severity
         
         return cleaned_mask, severity, len(valid_contours)
+    
+    def _is_likely_polaroid_frame(self, contour: np.ndarray, image: np.ndarray, h: int, w: int) -> bool:
+        """
+        Determine if a bright region is likely a polaroid white frame rather than glare.
+        
+        Polaroid frames are characterized by:
+        - Large rectangular regions along the edges
+        - Consistent white/off-white color (not irregular)
+        - Located at image borders
+        - High rectangularity score
+        
+        Args:
+            contour: The contour to analyze
+            image: Original image
+            h, w: Image dimensions
+            
+        Returns:
+            True if likely a polaroid frame, False if likely glare
+        """
+        area = cv2.contourArea(contour)
+        if area < 500:  # Too small to be a frame
+            return False
+        
+        # Get bounding rect
+        x, y, bw, bh = cv2.boundingRect(contour)
+        
+        # Check rectangularity - polaroid frames are very rectangular
+        rect_area = bw * bh
+        rectangularity = area / rect_area if rect_area > 0 else 0
+        
+        # Check if region touches or is near image edge
+        edge_margin = int(min(h, w) * 0.15)  # 15% margin from edge
+        touches_left = x < edge_margin
+        touches_right = (x + bw) > (w - edge_margin)
+        touches_top = y < edge_margin
+        touches_bottom = (y + bh) > (h - edge_margin)
+        
+        near_edge = touches_left or touches_right or touches_top or touches_bottom
+        
+        # Check aspect ratio - polaroid frames are usually elongated along edges
+        aspect_ratio = max(bw, bh) / (min(bw, bh) + 1)
+        
+        # Check if region is large relative to image (frames are significant portions)
+        area_ratio = area / (h * w)
+        
+        # Check color consistency within the region (frames are uniform, glare has gradients)
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(mask, [contour], -1, 255, -1)
+        
+        # Extract colors in the region
+        region_pixels = image[mask > 0]
+        if len(region_pixels) > 0:
+            # Frames are very uniform in color (low standard deviation)
+            color_std = np.std(region_pixels)
+            color_mean = np.mean(region_pixels)
+            
+            # Frames are typically very white (high mean brightness)
+            is_uniformly_white = color_std < 25 and color_mean > 200
+        else:
+            is_uniformly_white = False
+        
+        # Decision logic:
+        # 1. If touching edge + rectangular + uniform white -> likely frame
+        # 2. If large elongated region along edge -> likely frame
+        # 3. If large area ratio + touching edge -> likely frame
+        
+        if near_edge and rectangularity > 0.6 and is_uniformly_white:
+            return True
+        
+        if near_edge and aspect_ratio > 3 and area_ratio > 0.02:
+            return True
+        
+        # Check if it forms a border pattern (left/right strips or top/bottom strips)
+        is_vertical_strip = bw < w * 0.3 and bh > h * 0.4
+        is_horizontal_strip = bh < h * 0.3 and bw > w * 0.4
+        
+        if near_edge and (is_vertical_strip or is_horizontal_strip) and is_uniformly_white:
+            return True
+        
+        # Very large uniform white regions are likely frames, not glare
+        if area_ratio > 0.05 and is_uniformly_white and rectangularity > 0.5:
+            return True
+        
+        return False
     
     def _calculate_auto_threshold(self, l_channel: np.ndarray) -> int:
         """
