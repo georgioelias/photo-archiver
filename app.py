@@ -440,13 +440,13 @@ def display_image_comparison(col1, col2, original: np.ndarray, processed: np.nda
     """Display before/after image comparison."""
     with col1:
         st.markdown("### 📸 Original")
-        st.image(bgr_to_pil(original), width='stretch')
+        st.image(bgr_to_pil(original), use_container_width=True)
         info = get_image_info(original)
         st.caption(f"{info['width']}×{info['height']} • {info['size_bytes']/1024:.1f} KB")
     
     with col2:
         st.markdown("### ✨ Processed")
-        st.image(bgr_to_pil(processed), width='stretch')
+        st.image(bgr_to_pil(processed), use_container_width=True)
         info = get_image_info(processed)
         st.caption(f"{info['width']}×{info['height']} • {info['size_bytes']/1024:.1f} KB")
 
@@ -465,12 +465,12 @@ def display_pipeline_results(pipeline_results: List[Dict]):
             with col1:
                 if 'before' in result:
                     st.markdown("**Before**")
-                    st.image(bgr_to_pil(result['before']), width='stretch')
+                    st.image(bgr_to_pil(result['before']), use_container_width=True)
             
             with col2:
                 if 'after' in result:
                     st.markdown("**After**")
-                    st.image(bgr_to_pil(result['after']), width='stretch')
+                    st.image(bgr_to_pil(result['after']), use_container_width=True)
             
             with col3:
                 st.markdown("**Details**")
@@ -588,7 +588,7 @@ def display_compression_results(compression_results: Dict[float, Dict],
     
     # Rate-distortion curve
     fig = plot_rate_distortion_curve(metrics_data, "Quality vs. File Size")
-    st.plotly_chart(fig, width='stretch')
+    st.plotly_chart(fig, use_container_width=True)
     
     # Compression cards
     st.markdown("#### Compression Options")
@@ -839,7 +839,7 @@ def main():
             st.markdown("---")
             
             # Process button
-            if st.button("🚀 Process Image", type="primary", width='stretch'):
+            if st.button("🚀 Process Image", type="primary", use_container_width=True):
                 # Process image
                 progress_bar = st.progress(0)
                 status_text = st.empty()
@@ -971,11 +971,11 @@ def main():
                         
                         # Processing timeline
                         fig = create_processing_timeline(st.session_state.pipeline_results)
-                        st.plotly_chart(fig, width='stretch')
+                        st.plotly_chart(fig, use_container_width=True)
                 
                 with tab3:
                     fig = create_histogram_comparison(original_image, st.session_state.final_image)
-                    st.plotly_chart(fig, width='stretch')
+                    st.plotly_chart(fig, use_container_width=True)
                 
                 # AI Analysis results
                 if hasattr(st.session_state, 'ai_analysis') and st.session_state.ai_analysis:
@@ -1015,7 +1015,7 @@ def main():
                         data=proc_bytes,
                         file_name="processed_full.jpg",
                         mime="image/jpeg",
-                        width='stretch'
+                        use_container_width=True
                     )
                 
                 with col2:
@@ -1032,7 +1032,7 @@ def main():
                             data=package,
                             file_name="photo_archive.zip",
                             mime="application/zip",
-                            width='stretch'
+                            use_container_width=True
                         )
                 
                 with col3:
@@ -1047,7 +1047,7 @@ def main():
                             data=report,
                             file_name="processing_report.txt",
                             mime="text/plain",
-                            width='stretch'
+                            use_container_width=True
                         )
         
         except Exception as e:
