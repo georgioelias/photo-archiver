@@ -780,16 +780,16 @@ def main():
         all_steps = {
             'orientation': {'name': '🔄 AI Orientation', 'default_order': 1, 'default_enabled': True,
                            'help': 'Use Claude AI to detect and correct image rotation.'},
-            'glare': {'name': '✨ Glare Removal', 'default_order': 2, 'default_enabled': True,
+            'polaroid': {'name': '📷 Polaroid Crop', 'default_order': 2, 'default_enabled': True,
+                        'help': 'Extract photo content from inside the polaroid white frame.'},
+            'glare': {'name': '✨ Glare Removal', 'default_order': 3, 'default_enabled': True,
                      'help': 'Remove specular highlights and reflections from laminated surfaces.'},
-            'perspective': {'name': '📐 Perspective', 'default_order': 3, 'default_enabled': True,
+            'perspective': {'name': '📐 Perspective', 'default_order': 4, 'default_enabled': True,
                            'help': 'Correct perspective distortion from angled photos.'},
-            'color': {'name': '🎨 Color Correction', 'default_order': 4, 'default_enabled': True,
+            'color': {'name': '🎨 Color Correction', 'default_order': 5, 'default_enabled': True,
                      'help': 'Fix white balance, remove color casts, and restore faded colors.'},
-            'enhance': {'name': '🔧 Enhancement', 'default_order': 5, 'default_enabled': True,
+            'enhance': {'name': '🔧 Enhancement', 'default_order': 6, 'default_enabled': True,
                        'help': 'Denoising, sharpening, and contrast adjustment.'},
-            'polaroid': {'name': '📷 Polaroid Crop', 'default_order': 6, 'default_enabled': False,
-                        'help': 'Extract photo content from inside the polaroid frame.'},
         }
         
         # Step controls with order selection

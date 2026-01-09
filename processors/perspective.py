@@ -879,131 +879,126 @@ class PolaroidCropper:
     
     def _detect_by_white_border_scan(self, image: np.ndarray, gray: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         """
-        Detect polaroid content in TWO phases:
-        1. Find the white polaroid frame in the scene (may have background like table, hands)
-        2. Find the photo content inside that white frame
+        Simple and reliable polaroid content detection.
+        
+        After orientation correction, the image should have:
+        - White polaroid frame (brightness > 200)
+        - Photo content inside (darker than the frame)
+        
+        We scan from each edge inward to find where white ends and content begins.
         """
         h, w = gray.shape
         
-        # PHASE 1: Find the white polaroid frame region
-        # Threshold to find white areas (polaroid frame is white, typically >180)
-        _, white_mask = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY)
+        # Define white threshold - polaroid frames are very white
+        WHITE_THRESHOLD = 200
         
-        # Clean up the mask
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel)
-        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel)
+        # Helper function to check if a line is mostly white
+        def is_white_line(line_pixels):
+            return np.mean(line_pixels) > WHITE_THRESHOLD
         
-        # Find contours of white regions
-        contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        # STEP 1: Verify this looks like a polaroid (has white borders)
+        # Sample the edges
+        top_edge = gray[0:10, :].mean()
+        bottom_edge = gray[-10:, :].mean()
+        left_edge = gray[:, 0:10].mean()
+        right_edge = gray[:, -10:].mean()
         
-        if not contours:
-            return None
-        
-        # Find the largest white rectangular region (the polaroid frame)
-        best_frame = None
-        best_area = 0
-        
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if area < h * w * 0.05:  # Too small
-                continue
-            
-            # Get bounding rect
-            x, y, cw, ch = cv2.boundingRect(cnt)
-            rect_area = cw * ch
-            
-            # Check rectangularity
-            fill_ratio = area / rect_area if rect_area > 0 else 0
-            
-            # Polaroid frames are fairly rectangular (fill ratio > 0.6)
-            if fill_ratio > 0.5 and area > best_area:
-                # Check aspect ratio (polaroids are roughly 1:1.2)
-                aspect = max(cw, ch) / min(cw, ch) if min(cw, ch) > 0 else 10
-                if aspect < 2.5:  # Not too elongated
-                    best_area = area
-                    best_frame = (x, y, cw, ch)
-        
-        if best_frame is None:
-            return None
-        
-        fx, fy, fw, fh = best_frame
-        
-        # PHASE 2: Find the photo content inside the polaroid frame
-        # Extract the frame region
-        frame_region = gray[fy:fy+fh, fx:fx+fw]
-        frame_h, frame_w = frame_region.shape
-        
-        if frame_h < 50 or frame_w < 50:
-            return None
-        
-        # The white border brightness
-        border_sample = min(frame_h, frame_w) // 10
-        border_brightness = np.mean([
-            np.mean(frame_region[:border_sample, :]),  # top
-            np.mean(frame_region[-border_sample:, :]),  # bottom
-            np.mean(frame_region[:, :border_sample]),  # left
-            np.mean(frame_region[:, -border_sample:])   # right
+        # At least 2 edges should be white for this to be a polaroid
+        white_edge_count = sum([
+            top_edge > WHITE_THRESHOLD - 20,
+            bottom_edge > WHITE_THRESHOLD - 20,
+            left_edge > WHITE_THRESHOLD - 20,
+            right_edge > WHITE_THRESHOLD - 20
         ])
         
-        # Content is darker than the white border
-        # Use a threshold that's lower than the border
-        content_threshold = border_brightness - 50
+        if white_edge_count < 2:
+            return None  # Not a polaroid frame
         
-        # Scan from each edge inward to find where content starts
-        # Use a more aggressive threshold for detecting dark content
-        dark_threshold = content_threshold - 10
-        margin = self.config["margin_pixels"] + 3  # Extra margin for safety
+        # STEP 2: Scan from each edge inward to find content boundary
+        margin = self.config.get("margin_pixels", 5)
         
-        # Find left boundary within frame - scan until we hit dark pixels
-        inner_left = 0
-        for col in range(frame_w // 3):
-            col_slice = frame_region[frame_h//4:3*frame_h//4, col]  # Sample middle portion
-            if np.mean(col_slice < dark_threshold) > 0.4:
-                inner_left = col + margin
+        # Find LEFT boundary - scan columns from left
+        left = 0
+        for col in range(w // 3):
+            # Check vertical strip
+            strip = gray[h//4:3*h//4, col]
+            if np.mean(strip) < WHITE_THRESHOLD - 30:  # Hit dark content
+                left = col
                 break
         
-        # Find right boundary - scan from right edge inward
-        inner_right = frame_w
-        for col in range(frame_w - 1, 2 * frame_w // 3, -1):
-            col_slice = frame_region[frame_h//4:3*frame_h//4, col]  # Sample middle portion
-            if np.mean(col_slice < dark_threshold) > 0.4:
-                inner_right = col - margin
+        # Find RIGHT boundary - scan columns from right
+        right = w
+        for col in range(w - 1, 2*w//3, -1):
+            strip = gray[h//4:3*h//4, col]
+            if np.mean(strip) < WHITE_THRESHOLD - 30:
+                right = col
                 break
         
-        # Find top boundary
-        inner_top = 0
-        for row in range(frame_h // 3):
-            row_slice = frame_region[row, frame_w//4:3*frame_w//4]  # Sample middle portion
-            if np.mean(row_slice < dark_threshold) > 0.4:
-                inner_top = row + margin
+        # Find TOP boundary - scan rows from top
+        top = 0
+        for row in range(h // 3):
+            strip = gray[row, w//4:3*w//4]
+            if np.mean(strip) < WHITE_THRESHOLD - 30:
+                top = row
                 break
         
-        # Find bottom boundary (polaroids have thicker bottom border)
-        inner_bottom = frame_h
-        for row in range(frame_h - 1, frame_h // 2, -1):
-            row_slice = frame_region[row, frame_w//4:3*frame_w//4]  # Sample middle portion
-            if np.mean(row_slice < dark_threshold) > 0.4:
-                inner_bottom = row - margin
+        # Find BOTTOM boundary - scan rows from bottom (polaroid has thicker bottom)
+        bottom = h
+        for row in range(h - 1, h//2, -1):
+            strip = gray[row, w//4:3*w//4]
+            if np.mean(strip) < WHITE_THRESHOLD - 30:
+                bottom = row
                 break
         
-        # Calculate absolute coordinates
-        abs_left = fx + inner_left
-        abs_top = fy + inner_top
-        abs_right = fx + inner_right
-        abs_bottom = fy + inner_bottom
+        # Add small margin to avoid any edge artifacts
+        left = min(left + margin, w - 50)
+        right = max(right - margin, 50)
+        top = min(top + margin, h - 50)
+        bottom = max(bottom - margin, 50)
         
-        # Refine boundaries more aggressively to remove any remaining white
-        abs_left, abs_top, abs_right, abs_bottom = self._refine_boundaries(
-            gray, abs_left, abs_top, abs_right, abs_bottom, border_brightness - 30
-        )
+        # STEP 3: Refine - check edges and push inward if still white
+        for _ in range(15):
+            if left >= right - 50:
+                break
+            left_strip = gray[top:bottom, left:left+5]
+            if np.mean(left_strip) > WHITE_THRESHOLD - 40:
+                left += 5
+            else:
+                break
         
-        content_w = abs_right - abs_left
-        content_h = abs_bottom - abs_top
+        for _ in range(15):
+            if right <= left + 50:
+                break
+            right_strip = gray[top:bottom, right-5:right]
+            if np.mean(right_strip) > WHITE_THRESHOLD - 40:
+                right -= 5
+            else:
+                break
         
-        # Validate
-        if content_w > 50 and content_h > 50:
-            return (abs_left, abs_top, content_w, content_h)
+        for _ in range(15):
+            if top >= bottom - 50:
+                break
+            top_strip = gray[top:top+5, left:right]
+            if np.mean(top_strip) > WHITE_THRESHOLD - 40:
+                top += 5
+            else:
+                break
+        
+        for _ in range(15):
+            if bottom <= top + 50:
+                break
+            bottom_strip = gray[bottom-5:bottom, left:right]
+            if np.mean(bottom_strip) > WHITE_THRESHOLD - 40:
+                bottom -= 5
+            else:
+                break
+        
+        content_w = right - left
+        content_h = bottom - top
+        
+        # Validate - content should be reasonably sized
+        if content_w > w * 0.3 and content_h > h * 0.3:
+            return (left, top, content_w, content_h)
         
         return None
     
