@@ -506,7 +506,7 @@ def display_pipeline_results(pipeline_results: List[Dict]):
         
         for col, img, label in zip(cols, step_images, step_labels):
             with col:
-                st.image(bgr_to_pil(img), width='stretch')
+                st.image(bgr_to_pil(img), use_container_width=True)
                 st.markdown(f"<p style='text-align: center; color: #e94560; font-weight: 600; font-size: 0.85rem;'>{label}</p>", 
                            unsafe_allow_html=True)
     
@@ -735,22 +735,78 @@ def main():
         # API key from Streamlit secrets
         api_key = get_api_key()
         
-        # AI-powered orientation detection
-        enable_orientation = st.checkbox("🔄 AI Orientation Detection", value=True,
-                                         help="Use Claude AI to detect and correct image rotation")
+        st.markdown("---")
+        st.markdown("### 🔄 Processing Pipeline")
+        st.markdown("**Toggle steps on/off to customize the processing:**")
+        
+        # Visual pipeline steps with better organization
+        pipeline_steps = []
+        
+        # Step 0: Orientation Detection
+        enable_orientation = st.checkbox(
+            "🔄 **Step 0: AI Orientation Detection**", 
+            value=True,
+            help="Use Claude AI to detect and correct image rotation. Runs first to ensure proper orientation."
+        )
+        if enable_orientation:
+            pipeline_steps.append("🔄 Orientation")
         
         st.markdown("---")
-        st.markdown("### Processing Options")
         
-        enable_glare = st.checkbox("Glare Removal", value=True)
-        enable_perspective = st.checkbox("Perspective Correction", value=True)
-        enable_color = st.checkbox("Color Correction", value=True)
-        enable_enhance = st.checkbox("Enhancement", value=True)
+        # Step 1: Glare Removal
+        enable_glare = st.checkbox(
+            "✨ **Step 1: Glare Removal**", 
+            value=True,
+            help="Remove specular highlights and reflections from laminated surfaces. Detects bright, low-saturation regions."
+        )
+        if enable_glare:
+            pipeline_steps.append("✨ Glare Removal")
         
+        # Step 2: Perspective Correction
+        enable_perspective = st.checkbox(
+            "📐 **Step 2: Perspective Correction**", 
+            value=True,
+            help="Correct perspective distortion from angled photos. Finds document edges and applies perspective transform."
+        )
+        if enable_perspective:
+            pipeline_steps.append("📐 Perspective")
+        
+        # Step 3: Color Correction
+        enable_color = st.checkbox(
+            "🎨 **Step 3: Color Correction**", 
+            value=True,
+            help="Fix white balance, remove color casts, and restore faded colors. Applies CLAHE for contrast."
+        )
+        if enable_color:
+            pipeline_steps.append("🎨 Color Correction")
+        
+        # Step 4: Enhancement
+        enable_enhance = st.checkbox(
+            "🔧 **Step 4: Enhancement**", 
+            value=True,
+            help="Optional denoising, sharpening, and contrast adjustment. Uses AI recommendations when available."
+        )
+        if enable_enhance:
+            pipeline_steps.append("🔧 Enhancement")
+        
+        # Step 5: Polaroid Crop (optional)
         st.markdown("---")
-        st.markdown("### Polaroid Options")
-        enable_polaroid_crop = st.checkbox("📷 Crop Polaroid Content", value=False,
-                                           help="Extract the photo content from inside the polaroid frame (removes white border)")
+        enable_polaroid_crop = st.checkbox(
+            "📷 **Step 5: Polaroid Content Crop**", 
+            value=False,
+            help="Extract the photo content from inside the polaroid frame. Removes white border and surrounding area."
+        )
+        if enable_polaroid_crop:
+            pipeline_steps.append("📷 Polaroid Crop")
+        
+        # Visual pipeline preview
+        if pipeline_steps:
+            st.markdown("---")
+            st.markdown("**📋 Active Pipeline:**")
+            for i, step in enumerate(pipeline_steps):
+                st.markdown(f"{i+1}. {step}")
+        else:
+            st.warning("⚠️ No steps enabled! Enable at least one step to process images.")
         
         st.markdown("---")
         st.markdown("### Compression Targets")
