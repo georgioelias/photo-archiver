@@ -449,39 +449,33 @@ class OrientationDetector:
             client = self._get_client()
             b64_image = self._encode_image(image)
             
-            prompt = """Analyze this scanned photograph (likely a polaroid being held) and determine the CORRECT orientation.
+            prompt = """Analyze this scanned POLAROID photograph and determine the correct orientation.
 
-PRIORITY ORDER FOR DETERMINING CORRECT ORIENTATION:
+This is a polaroid photo being held by someone's hand during scanning. 
 
-**#1 HIGHEST PRIORITY - THE PHOTO CONTENT ITSELF:**
-Look at what the photograph is showing and orient it naturally:
-- SKY, clouds, ceiling, roof structures → should be at the TOP
-- GROUND, floor, base of objects → should be at the BOTTOM  
-- PEOPLE should be upright (heads at top, feet at bottom)
-- BUILDINGS should be vertical (roof at top, foundation at bottom)
-- VEHICLES (cars, trains, etc.) should be upright on their wheels
-- TEXT in the photo should be readable left-to-right
-- HORIZON LINE should be horizontal
+TO FIND THE CORRECT ORIENTATION, use these clues together:
 
-**#2 SECONDARY CLUES (use only if photo content is ambiguous):**
-- Polaroid photos have a thicker white border which is typically at the bottom
-- Hands/fingers holding the photo are usually at the bottom
+1. **POLAROID FRAME**: The thick white border of a polaroid is ALWAYS at the BOTTOM when correctly oriented
+2. **HAND/FINGER**: The person holding the photo typically holds it from the BOTTOM, so the hand should end up at the BOTTOM
+3. **PHOTO CONTENT**: The subject in the photo should look natural (sky at top if visible, people upright, etc.)
 
-IMPORTANT: The photo CONTENT orientation matters most! A hand might be holding the photo sideways or upside-down during scanning - ignore this if the photo content clearly indicates a different orientation.
+All three clues should AGREE. The thick white polaroid border and the hand holding it should both be at the BOTTOM of the correctly oriented image.
+
+Look at where the THICK WHITE BORDER is currently located, and rotate so it ends up at the BOTTOM.
 
 Respond in JSON format only:
 {
     "needs_rotation": true/false,
     "rotation_degrees": 0/90/180/270,
     "confidence": "high/medium/low",
-    "description": "Brief explanation based on photo CONTENT"
+    "description": "Explain where the thick white border is and what rotation puts it at bottom"
 }
 
-rotation_degrees = CLOCKWISE rotation needed:
-- 0 = already correct
-- 90 = rotate 90° clockwise
-- 180 = upside down, rotate 180°
-- 270 = rotate 270° clockwise (90° counter-clockwise)"""
+rotation_degrees = CLOCKWISE rotation needed to put thick white border at BOTTOM:
+- 0 = thick white border is already at bottom
+- 90 = thick white border is on the left, rotate 90° clockwise
+- 180 = thick white border is at top, rotate 180°
+- 270 = thick white border is on the right, rotate 270° clockwise"""
 
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
