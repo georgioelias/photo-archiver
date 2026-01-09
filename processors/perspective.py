@@ -535,11 +535,17 @@ class PolaroidCropper:
     """
     Robust photo content extraction from polaroid/laminated frames.
     
-    Specialized for detecting WHITE polaroid borders with:
-    1. Brightness profile scanning from all 4 edges
-    2. Adaptive threshold based on border/content contrast
-    3. Multi-pass refinement for accurate boundaries
-    4. Fallback strategies for difficult cases
+    PRIMARY STRATEGY: Strict white border detection for polaroids.
+    Polaroid frames have distinctive white borders that are:
+    - Very bright (>200 luminance typically)
+    - Low saturation (near white/off-white)
+    - Uniform color with low variance
+    
+    Fallback strategies:
+    1. Color variance analysis
+    2. Edge density analysis
+    3. Gradient-based border detection
+    4. Contour-based detection
     """
     
     def __init__(self, config: Optional[Dict[str, Any]] = None):
@@ -551,11 +557,14 @@ class PolaroidCropper:
         """
         self.config = config or {}
         self.default_config = {
-            "min_content_ratio": 0.20,  # Min ratio of content to total area
-            "white_threshold": 200,     # Pixels brighter than this are likely border
-            "margin_pixels": 5,         # Extra margin to ensure clean crop
-            "min_border_width": 10,     # Minimum expected border width in pixels
-            "scan_step": 1,             # Pixel step for scanning (1 = every pixel)
+            "min_content_ratio": 0.25,  # Min ratio of content to total area
+            "white_threshold": 200,     # Strict threshold for white detection (raised for polaroids)
+            "saturation_threshold": 40, # Max saturation for white areas
+            "margin_pixels": 5,         # Extra margin to crop
+            "variance_threshold": 500,  # Color variance threshold for content detection
+            "edge_density_ratio": 2.0,  # Content should have 2x more edges than border
+            "min_border_width": 0.03,   # Minimum border width as ratio of image dimension
+            "strict_white_detection": True,  # Enable strict white border detection
         }
         for key, value in self.default_config.items():
             if key not in self.config:
@@ -623,6 +632,176 @@ class PolaroidCropper:
             'center_color_var': center_color_var,
             'has_frame_structure': center_variance > avg_border_variance * 1.5
         }
+    
+    def _detect_strict_white_borders(self, image: np.ndarray, gray: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+        """
+        STRICT white border detection specifically designed for polaroid frames.
+        
+        Polaroid frames have very specific characteristics:
+        - Bright white borders (>200 luminance typically)
+        - Low saturation (near pure white)
+        - Very uniform color (low variance)
+        - Clear transition to photo content
+        
+        This method scans from each edge inward looking for the transition
+        from white border to photo content.
+        """
+        h, w = image.shape[:2]
+        white_threshold = self.config["white_threshold"]
+        min_border = int(min(h, w) * self.config["min_border_width"])
+        
+        # Convert to HSV for saturation analysis
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        saturation = hsv[:, :, 1]
+        sat_threshold = self.config["saturation_threshold"]
+        
+        # Create strict white mask: high brightness AND low saturation
+        white_mask = (gray > white_threshold) & (saturation < sat_threshold)
+        
+        # Scan from LEFT edge - find where white stops
+        left_boundary = 0
+        for col in range(min(w // 2, w)):
+            # Check if this column is mostly white
+            col_white_ratio = np.mean(white_mask[:, col])
+            if col_white_ratio < 0.5:  # Less than 50% white = content starts
+                left_boundary = max(0, col - 2)
+                break
+        
+        # Scan from RIGHT edge
+        right_boundary = w
+        for col in range(w - 1, max(w // 2, 0), -1):
+            col_white_ratio = np.mean(white_mask[:, col])
+            if col_white_ratio < 0.5:
+                right_boundary = min(w, col + 2)
+                break
+        
+        # Scan from TOP edge
+        top_boundary = 0
+        for row in range(min(h // 2, h)):
+            row_white_ratio = np.mean(white_mask[row, :])
+            if row_white_ratio < 0.5:
+                top_boundary = max(0, row - 2)
+                break
+        
+        # Scan from BOTTOM edge
+        bottom_boundary = h
+        for row in range(h - 1, max(h // 2, 0), -1):
+            row_white_ratio = np.mean(white_mask[row, :])
+            if row_white_ratio < 0.5:
+                bottom_boundary = min(h, row + 2)
+                break
+        
+        # Validate the detected boundaries
+        content_width = right_boundary - left_boundary
+        content_height = bottom_boundary - top_boundary
+        
+        # Check if we found meaningful borders (at least min_border on some side)
+        has_left_border = left_boundary > min_border
+        has_right_border = (w - right_boundary) > min_border
+        has_top_border = top_boundary > min_border
+        has_bottom_border = (h - bottom_boundary) > min_border
+        
+        borders_found = sum([has_left_border, has_right_border, has_top_border, has_bottom_border])
+        
+        # Need at least 2 borders to be confident it's a polaroid frame
+        if borders_found < 2:
+            return None
+        
+        # Validate content area is reasonable
+        if content_width < w * 0.3 or content_height < h * 0.3:
+            return None
+        
+        if content_width > w * 0.95 or content_height > h * 0.95:
+            return None
+        
+        margin = self.config["margin_pixels"]
+        x = max(0, left_boundary + margin)
+        y = max(0, top_boundary + margin)
+        cw = min(w - x, content_width - 2 * margin)
+        ch = min(h - y, content_height - 2 * margin)
+        
+        return (x, y, cw, ch)
+    
+    def _detect_white_border_with_gradient(self, image: np.ndarray, gray: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
+        """
+        Detect white borders using gradient analysis at border transitions.
+        
+        Looks for sharp transitions from bright white border to photo content.
+        More robust when the white isn't perfectly uniform.
+        """
+        h, w = image.shape[:2]
+        white_threshold = self.config["white_threshold"] - 20  # Slightly more lenient
+        min_border = int(min(h, w) * self.config["min_border_width"])
+        
+        # Calculate brightness profile along each direction
+        # and look for the sharpest drop from white
+        
+        # LEFT boundary: scan columns from left
+        left_boundary = 0
+        col_means = [np.mean(gray[:, i]) for i in range(min(w // 3, w))]
+        for i in range(1, len(col_means)):
+            if col_means[i - 1] > white_threshold and col_means[i] < white_threshold - 30:
+                # Sharp drop detected
+                left_boundary = i
+                break
+            elif col_means[i] < white_threshold - 50:
+                # Gradual transition
+                left_boundary = i
+                break
+        
+        # RIGHT boundary: scan columns from right
+        right_boundary = w
+        col_means_right = [np.mean(gray[:, w - 1 - i]) for i in range(min(w // 3, w))]
+        for i in range(1, len(col_means_right)):
+            if col_means_right[i - 1] > white_threshold and col_means_right[i] < white_threshold - 30:
+                right_boundary = w - i
+                break
+            elif col_means_right[i] < white_threshold - 50:
+                right_boundary = w - i
+                break
+        
+        # TOP boundary: scan rows from top
+        top_boundary = 0
+        row_means = [np.mean(gray[i, :]) for i in range(min(h // 3, h))]
+        for i in range(1, len(row_means)):
+            if row_means[i - 1] > white_threshold and row_means[i] < white_threshold - 30:
+                top_boundary = i
+                break
+            elif row_means[i] < white_threshold - 50:
+                top_boundary = i
+                break
+        
+        # BOTTOM boundary: scan rows from bottom
+        bottom_boundary = h
+        row_means_bottom = [np.mean(gray[h - 1 - i, :]) for i in range(min(h // 3, h))]
+        for i in range(1, len(row_means_bottom)):
+            if row_means_bottom[i - 1] > white_threshold and row_means_bottom[i] < white_threshold - 30:
+                bottom_boundary = h - i
+                break
+            elif row_means_bottom[i] < white_threshold - 50:
+                bottom_boundary = h - i
+                break
+        
+        # Validate
+        content_width = right_boundary - left_boundary
+        content_height = bottom_boundary - top_boundary
+        
+        has_borders = (left_boundary > min_border or (w - right_boundary) > min_border or 
+                       top_boundary > min_border or (h - bottom_boundary) > min_border)
+        
+        if not has_borders:
+            return None
+        
+        if content_width < w * 0.3 or content_height < h * 0.3:
+            return None
+        
+        margin = self.config["margin_pixels"]
+        x = max(0, left_boundary + margin)
+        y = max(0, top_boundary + margin)
+        cw = min(w - x, content_width - 2 * margin)
+        ch = min(h - y, content_height - 2 * margin)
+        
+        return (x, y, cw, ch)
     
     def _detect_by_gradient_transition(self, gray: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         """
@@ -877,183 +1056,14 @@ class PolaroidCropper:
         
         return None
     
-    def _detect_by_white_border_scan(self, image: np.ndarray, gray: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
-        """
-        Simple and reliable polaroid content detection.
-        
-        After orientation correction, the image should have:
-        - White polaroid frame (brightness > 200)
-        - Photo content inside (darker than the frame)
-        
-        We scan from each edge inward to find where white ends and content begins.
-        """
-        h, w = gray.shape
-        
-        # Define white threshold - polaroid frames are very white
-        WHITE_THRESHOLD = 200
-        
-        # Helper function to check if a line is mostly white
-        def is_white_line(line_pixels):
-            return np.mean(line_pixels) > WHITE_THRESHOLD
-        
-        # STEP 1: Verify this looks like a polaroid (has white borders)
-        # Sample the edges
-        top_edge = gray[0:10, :].mean()
-        bottom_edge = gray[-10:, :].mean()
-        left_edge = gray[:, 0:10].mean()
-        right_edge = gray[:, -10:].mean()
-        
-        # At least 2 edges should be white for this to be a polaroid
-        white_edge_count = sum([
-            top_edge > WHITE_THRESHOLD - 20,
-            bottom_edge > WHITE_THRESHOLD - 20,
-            left_edge > WHITE_THRESHOLD - 20,
-            right_edge > WHITE_THRESHOLD - 20
-        ])
-        
-        if white_edge_count < 2:
-            return None  # Not a polaroid frame
-        
-        # STEP 2: Scan from each edge inward to find content boundary
-        margin = self.config.get("margin_pixels", 5)
-        
-        # Find LEFT boundary - scan columns from left
-        left = 0
-        for col in range(w // 3):
-            # Check vertical strip
-            strip = gray[h//4:3*h//4, col]
-            if np.mean(strip) < WHITE_THRESHOLD - 30:  # Hit dark content
-                left = col
-                break
-        
-        # Find RIGHT boundary - scan columns from right
-        right = w
-        for col in range(w - 1, 2*w//3, -1):
-            strip = gray[h//4:3*h//4, col]
-            if np.mean(strip) < WHITE_THRESHOLD - 30:
-                right = col
-                break
-        
-        # Find TOP boundary - scan rows from top
-        top = 0
-        for row in range(h // 3):
-            strip = gray[row, w//4:3*w//4]
-            if np.mean(strip) < WHITE_THRESHOLD - 30:
-                top = row
-                break
-        
-        # Find BOTTOM boundary - scan rows from bottom (polaroid has thicker bottom)
-        bottom = h
-        for row in range(h - 1, h//2, -1):
-            strip = gray[row, w//4:3*w//4]
-            if np.mean(strip) < WHITE_THRESHOLD - 30:
-                bottom = row
-                break
-        
-        # Add small margin to avoid any edge artifacts
-        left = min(left + margin, w - 50)
-        right = max(right - margin, 50)
-        top = min(top + margin, h - 50)
-        bottom = max(bottom - margin, 50)
-        
-        # STEP 3: Refine - check edges and push inward if still white
-        for _ in range(15):
-            if left >= right - 50:
-                break
-            left_strip = gray[top:bottom, left:left+5]
-            if np.mean(left_strip) > WHITE_THRESHOLD - 40:
-                left += 5
-            else:
-                break
-        
-        for _ in range(15):
-            if right <= left + 50:
-                break
-            right_strip = gray[top:bottom, right-5:right]
-            if np.mean(right_strip) > WHITE_THRESHOLD - 40:
-                right -= 5
-            else:
-                break
-        
-        for _ in range(15):
-            if top >= bottom - 50:
-                break
-            top_strip = gray[top:top+5, left:right]
-            if np.mean(top_strip) > WHITE_THRESHOLD - 40:
-                top += 5
-            else:
-                break
-        
-        for _ in range(15):
-            if bottom <= top + 50:
-                break
-            bottom_strip = gray[bottom-5:bottom, left:right]
-            if np.mean(bottom_strip) > WHITE_THRESHOLD - 40:
-                bottom -= 5
-            else:
-                break
-        
-        content_w = right - left
-        content_h = bottom - top
-        
-        # Validate - content should be reasonably sized
-        if content_w > w * 0.3 and content_h > h * 0.3:
-            return (left, top, content_w, content_h)
-        
-        return None
-    
-    def _refine_boundaries(self, gray: np.ndarray, left: int, top: int, right: int, bottom: int, 
-                           threshold: float) -> Tuple[int, int, int, int]:
-        """
-        Refine crop boundaries by checking edge pixels and adjusting inward if needed.
-        """
-        h, w = gray.shape
-        
-        # Check left edge - if still too bright, move inward
-        for _ in range(20):
-            if left >= right - 50:
-                break
-            edge_strip = gray[top:bottom, left:left+5]
-            if np.mean(edge_strip) > threshold:
-                left += 3
-            else:
-                break
-        
-        # Check right edge
-        for _ in range(20):
-            if right <= left + 50:
-                break
-            edge_strip = gray[top:bottom, right-5:right]
-            if np.mean(edge_strip) > threshold:
-                right -= 3
-            else:
-                break
-        
-        # Check top edge
-        for _ in range(20):
-            if top >= bottom - 50:
-                break
-            edge_strip = gray[top:top+5, left:right]
-            if np.mean(edge_strip) > threshold:
-                top += 3
-            else:
-                break
-        
-        # Check bottom edge
-        for _ in range(20):
-            if bottom <= top + 50:
-                break
-            edge_strip = gray[bottom-5:bottom, left:right]
-            if np.mean(edge_strip) > threshold:
-                bottom -= 3
-            else:
-                break
-        
-        return left, top, right, bottom
-    
     def detect_polaroid_content(self, image: np.ndarray) -> Tuple[Optional[Tuple[int, int, int, int]], str]:
         """
         Detect the actual photo content inside a polaroid frame using multiple strategies.
+        
+        PRIORITY ORDER:
+        1. Strict white border detection (best for actual polaroids)
+        2. White border with gradient analysis (handles less uniform whites)
+        3. Fallback methods (color segmentation, contour, etc.)
         
         Args:
             image: BGR input image
@@ -1064,20 +1074,37 @@ class PolaroidCropper:
         h, w = image.shape[:2]
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
-        # Analyze image properties first
+        # FIRST: Try strict white border detection (optimized for polaroids)
+        if self.config.get("strict_white_detection", True):
+            # Method 1: Strict white border detection
+            try:
+                result = self._detect_strict_white_borders(image, gray)
+                if result is not None:
+                    x, y, cw, ch = result
+                    if cw > w * 0.25 and ch > h * 0.25:
+                        return result, "strict_white_border"
+            except Exception:
+                pass
+            
+            # Method 2: White border with gradient analysis
+            try:
+                result = self._detect_white_border_with_gradient(image, gray)
+                if result is not None:
+                    x, y, cw, ch = result
+                    if cw > w * 0.25 and ch > h * 0.25:
+                        return result, "white_border_gradient"
+            except Exception:
+                pass
+        
+        # Analyze image properties for fallback methods
         analysis = self._analyze_region_properties(image, gray)
         
-        # PRIORITY: Try white border scan first - most reliable for polaroids
-        try:
-            white_border_result = self._detect_by_white_border_scan(image, gray)
-            if white_border_result is not None:
-                x, y, cw, ch = white_border_result
-                if cw > w * 0.25 and ch > h * 0.25:
-                    return white_border_result, "white_border_scan"
-        except Exception:
+        # If no clear frame structure, might not be a polaroid
+        if not analysis['has_frame_structure'] and analysis['variance_ratio'] < 1.2:
+            # Still try detection methods but with lower confidence
             pass
         
-        # Fallback to other detection methods
+        # FALLBACK: Try other detection methods in order of reliability
         detection_methods = [
             (self._detect_by_color_segmentation, "color_segmentation"),
             (self._detect_by_rectangular_contour, "rectangular_contour"),
@@ -1103,9 +1130,8 @@ class PolaroidCropper:
                         offset = abs(center_x - w // 2) + abs(center_y - h // 2)
                         area_ratio = (cw * ch) / (w * h)
                         
-                        # Prefer smaller results (tighter crop) that are centered
-                        # Changed from preferring larger to preferring tighter crops
-                        score = (1 - area_ratio * 0.3) * (1 - offset / (w + h))
+                        # Prefer larger, centered results
+                        score = area_ratio * (1 - offset / (w + h))
                         results.append((result, method_name, score))
             except Exception:
                 continue
@@ -1113,7 +1139,7 @@ class PolaroidCropper:
         if not results:
             return None, "none"
         
-        # Return best result (now prefers tighter, centered crops)
+        # Return best result
         best = max(results, key=lambda x: x[2])
         return best[0], best[1]
     

@@ -428,6 +428,8 @@ class OrientationDetector:
     def detect_orientation(self, image: np.ndarray) -> OrientationResult:
         """
         Detect if image needs rotation correction.
+        Specifically optimized for polaroid photos where the thick white border
+        should always be at the BOTTOM.
         
         Args:
             image: BGR numpy array
@@ -449,30 +451,41 @@ class OrientationDetector:
             client = self._get_client()
             b64_image = self._encode_image(image)
             
-            prompt = """Look at this polaroid photo and find the THICK WHITE BORDER (wider than other edges).
+            prompt = """Analyze this POLAROID photograph and determine its correct orientation.
 
-A polaroid has 4 white borders but ONE is THICKER - this thick border should be at the BOTTOM.
+MOST IMPORTANT RULE FOR POLAROIDS:
+Polaroid photos have a distinctive asymmetric white frame. The THICK white border (the widest white edge) 
+should ALWAYS be at the BOTTOM of the image when correctly oriented. This is the defining characteristic 
+of polaroid photos.
 
-STEP 1: Find which edge has the THICKEST white border (measure visually - one edge is noticeably wider)
-STEP 2: Determine what clockwise rotation puts that edge at the BOTTOM
+Steps to determine orientation:
+1. First, identify the polaroid frame - look for the white borders around the photo content
+2. Find which side has the THICKEST white border - this is the "signature strip" of a polaroid
+3. The thick white border MUST be at the BOTTOM when correctly oriented
+4. If the thick border is on the left, rotate 90° clockwise
+5. If the thick border is on the right, rotate 270° clockwise (or 90° counter-clockwise)
+6. If the thick border is at the top, rotate 180°
+7. If the thick border is already at the bottom, no rotation needed
 
-CLOCKWISE ROTATION GUIDE (imagine rotating the image like turning a steering wheel to the right):
-- If thick border is at BOTTOM → 0° (no rotation needed)
-- If thick border is on LEFT edge → 90° clockwise (left edge moves to bottom)
-- If thick border is at TOP → 180° (top flips to bottom)  
-- If thick border is on RIGHT edge → 270° clockwise (right edge moves to bottom)
+Secondary cues (only use if polaroid frame is unclear):
+- People's faces should be upright
+- Text should be readable left-to-right
+- Horizon lines should be horizontal
 
-LEFT means the left side of the image as YOU see it (west side).
-RIGHT means the right side of the image as YOU see it (east side).
-
-Respond ONLY with JSON:
+Respond in JSON format only:
 {
     "needs_rotation": true/false,
     "rotation_degrees": 0/90/180/270,
     "confidence": "high/medium/low",
-    "thick_border_location": "bottom/left/top/right",
-    "description": "brief explanation"
-}"""
+    "thick_border_location": "top/bottom/left/right",
+    "description": "Brief explanation focusing on where the thick polaroid border is located"
+}
+
+IMPORTANT: rotation_degrees is the CLOCKWISE rotation needed to correct the image.
+- 0 = thick border is at bottom (correct orientation)
+- 90 = thick border is on the left → rotate 90° clockwise to move it to bottom
+- 180 = thick border is at top → rotate 180° to flip it to bottom
+- 270 = thick border is on the right → rotate 270° clockwise to move it to bottom"""
 
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",
