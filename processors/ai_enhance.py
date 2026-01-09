@@ -449,14 +449,21 @@ class OrientationDetector:
             client = self._get_client()
             b64_image = self._encode_image(image)
             
-            prompt = """Analyze this photograph and determine if it needs rotation correction.
+            prompt = """Analyze this scanned photograph (likely a polaroid or laminated photo) and determine if it needs rotation correction.
 
-Look for visual cues like:
-- Text orientation (should be readable left-to-right)
-- People's faces and bodies (should be upright)
-- Horizon lines (should be horizontal)
-- Buildings and structures (should be vertical)
-- Natural orientation of objects
+This is a POLAROID or physical photo being held/scanned. Key orientation clues:
+
+MOST IMPORTANT CLUES:
+1. **HAND/FINGER POSITION**: If there's a hand or fingers holding the photo, they should be at the BOTTOM of the correctly oriented image (people hold photos from below)
+2. **POLAROID WHITE BORDER**: Polaroid photos have a THICKER white border at the bottom. The thicker white edge = BOTTOM of the photo
+3. **The actual photo content** should have the subject matter correctly oriented
+
+Other visual cues:
+- Text should be readable left-to-right
+- People's faces and bodies should be upright
+- Horizon lines should be horizontal
+- Buildings should be vertical
+- Sky should be at the top
 
 Determine the rotation needed to make the image correctly oriented.
 
@@ -468,11 +475,11 @@ Respond in JSON format only:
     "description": "Brief explanation of why rotation is or isn't needed"
 }
 
-IMPORTANT: rotation_degrees should be the clockwise rotation needed to correct the image.
-- 0 = image is correctly oriented
-- 90 = image needs to be rotated 90° clockwise (currently rotated 90° counter-clockwise)
-- 180 = image is upside down
-- 270 = image needs to be rotated 270° clockwise (currently rotated 90° clockwise)"""
+IMPORTANT: rotation_degrees should be the CLOCKWISE rotation needed to correct the image.
+- 0 = image is correctly oriented (hand at bottom, thick polaroid border at bottom)
+- 90 = rotate 90° clockwise to fix
+- 180 = image is upside down, rotate 180° to fix
+- 270 = rotate 270° clockwise (or 90° counter-clockwise) to fix"""
 
             response = client.messages.create(
                 model="claude-sonnet-4-20250514",

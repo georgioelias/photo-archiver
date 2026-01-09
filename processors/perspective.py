@@ -951,37 +951,39 @@ class PolaroidCropper:
         content_threshold = border_brightness - 50
         
         # Scan from each edge inward to find where content starts
-        margin = self.config["margin_pixels"]
+        # Use a more aggressive threshold for detecting dark content
+        dark_threshold = content_threshold - 10
+        margin = self.config["margin_pixels"] + 3  # Extra margin for safety
         
-        # Find left boundary within frame
+        # Find left boundary within frame - scan until we hit dark pixels
         inner_left = 0
         for col in range(frame_w // 3):
-            col_slice = frame_region[:, col]
-            if np.mean(col_slice < content_threshold) > 0.3:
+            col_slice = frame_region[frame_h//4:3*frame_h//4, col]  # Sample middle portion
+            if np.mean(col_slice < dark_threshold) > 0.4:
                 inner_left = col + margin
                 break
         
-        # Find right boundary
+        # Find right boundary - scan from right edge inward
         inner_right = frame_w
         for col in range(frame_w - 1, 2 * frame_w // 3, -1):
-            col_slice = frame_region[:, col]
-            if np.mean(col_slice < content_threshold) > 0.3:
+            col_slice = frame_region[frame_h//4:3*frame_h//4, col]  # Sample middle portion
+            if np.mean(col_slice < dark_threshold) > 0.4:
                 inner_right = col - margin
                 break
         
         # Find top boundary
         inner_top = 0
         for row in range(frame_h // 3):
-            row_slice = frame_region[row, :]
-            if np.mean(row_slice < content_threshold) > 0.3:
+            row_slice = frame_region[row, frame_w//4:3*frame_w//4]  # Sample middle portion
+            if np.mean(row_slice < dark_threshold) > 0.4:
                 inner_top = row + margin
                 break
         
         # Find bottom boundary (polaroids have thicker bottom border)
         inner_bottom = frame_h
         for row in range(frame_h - 1, frame_h // 2, -1):
-            row_slice = frame_region[row, :]
-            if np.mean(row_slice < content_threshold) > 0.3:
+            row_slice = frame_region[row, frame_w//4:3*frame_w//4]  # Sample middle portion
+            if np.mean(row_slice < dark_threshold) > 0.4:
                 inner_bottom = row - margin
                 break
         
@@ -991,9 +993,9 @@ class PolaroidCropper:
         abs_right = fx + inner_right
         abs_bottom = fy + inner_bottom
         
-        # Refine boundaries to remove any remaining white
+        # Refine boundaries more aggressively to remove any remaining white
         abs_left, abs_top, abs_right, abs_bottom = self._refine_boundaries(
-            gray, abs_left, abs_top, abs_right, abs_bottom, content_threshold + 20
+            gray, abs_left, abs_top, abs_right, abs_bottom, border_brightness - 30
         )
         
         content_w = abs_right - abs_left
