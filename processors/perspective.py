@@ -711,15 +711,15 @@ class PolaroidCropper:
     
     def _extract_content_from_polaroid_region(self, image: np.ndarray, polaroid_corners: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         """
-        Given the corners of a polaroid frame, extract the inner photo content.
-        Crops right at the INNER edge of the white border - no white should remain.
+        Given the corners of a polaroid frame, extract ONLY the inner photo.
+        No white border should remain - crops aggressively to photo content only.
         
         Args:
             image: Original image
             polaroid_corners: 4 corner points of the polaroid
             
         Returns:
-            Crop coordinates (x, y, w, h) for the inner content
+            Crop coordinates (x, y, w, h) for the inner photo only
         """
         h, w = image.shape[:2]
         
@@ -745,58 +745,57 @@ class PolaroidCropper:
         
         rh, rw = polaroid_region.shape[:2]
         
-        # More aggressive detection - look for DEFINITE content (not just "maybe not white")
-        # White border: val > 200, sat < 30
-        # Content: val < 200 OR sat > 40
+        # VERY STRICT content detection
+        # White/light border: val > 180, sat < 50
+        # Definite content: val < 170 OR sat > 50 (has color or is darker)
         
-        # Helper: check if a line is definitely content (not white border)
-        def is_content_column(col_idx):
-            col_sat = np.percentile(sat[:, col_idx], 50)  # Median
-            col_val = np.percentile(val[:, col_idx], 50)
-            # Content if median saturation is notable OR brightness is lower
-            return col_sat > 40 or col_val < 190
+        def is_definite_content_column(col_idx):
+            # Use 40th percentile - more conservative, finds content sooner
+            col_sat = np.percentile(sat[:, col_idx], 40)
+            col_val = np.percentile(val[:, col_idx], 40)
+            return col_sat > 50 or col_val < 170
         
-        def is_content_row(row_idx):
-            row_sat = np.percentile(sat[row_idx, :], 50)
-            row_val = np.percentile(val[row_idx, :], 50)
-            return row_sat > 40 or row_val < 190
+        def is_definite_content_row(row_idx):
+            row_sat = np.percentile(sat[row_idx, :], 40)
+            row_val = np.percentile(val[row_idx, :], 40)
+            return row_sat > 50 or row_val < 170
         
-        # LEFT - scan until we find definite content
+        # LEFT - find first definite content
         left = 0
         for col in range(rw // 2):
-            if is_content_column(col):
+            if is_definite_content_column(col):
                 left = col
                 break
         
         # RIGHT
         right = rw
         for col in range(rw - 1, rw // 2, -1):
-            if is_content_column(col):
-                right = col + 1  # Include this column
+            if is_definite_content_column(col):
+                right = col + 1
                 break
         
         # TOP
         top = 0
         for row in range(rh // 2):
-            if is_content_row(row):
+            if is_definite_content_row(row):
                 top = row
                 break
         
-        # BOTTOM (thick border)
+        # BOTTOM (thick border - scan carefully)
         bottom = rh
         for row in range(rh - 1, rh // 2, -1):
-            if is_content_row(row):
-                bottom = row + 1  # Include this row
+            if is_definite_content_row(row):
+                bottom = row + 1
                 break
         
-        # Add extra inward margin to ensure NO white remnants
-        # This is aggressive - we'd rather lose a pixel of content than keep white
-        inward_margin = max(8, int(min(rw, rh) * 0.015))  # 1.5% or at least 8px
+        # AGGRESSIVE inward margin - absolutely no white remnants
+        # 2.5% of dimension or minimum 12 pixels
+        margin = max(12, int(min(rw, rh) * 0.025))
         
-        left += inward_margin
-        right -= inward_margin
-        top += inward_margin
-        bottom -= inward_margin
+        left += margin
+        right -= margin
+        top += margin
+        bottom -= margin
         
         # Calculate final crop coordinates in original image space
         final_x = x + left

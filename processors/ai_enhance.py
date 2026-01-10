@@ -25,6 +25,16 @@ class AIAnalysisResult:
     error_message: Optional[str] = None
 
 
+@dataclass
+class AIComparisonResult:
+    """Result from AI comparison of original vs processed image."""
+    improvements: List[Dict[str, Any]]  # List of {aspect, improvement_percent, description}
+    overall_improvement: float  # Percentage
+    summary: str  # Positive summary of changes
+    success: bool
+    error_message: Optional[str] = None
+
+
 class AIEnhancer:
     """
     AI-powered image analysis using Anthropic's Claude API.
@@ -203,24 +213,25 @@ Respond in valid JSON format only:
                 error_message=str(e)
             )
     
-    def compare_images(self, original: np.ndarray, processed: np.ndarray) -> Dict[str, Any]:
+    def compare_images(self, original: np.ndarray, processed: np.ndarray) -> AIComparisonResult:
         """
-        Compare original and processed images using AI.
+        Compare original and processed images - focus on POSITIVE improvements only.
         
         Args:
             original: Original BGR image
             processed: Processed BGR image
             
         Returns:
-            Dictionary with comparison results
+            AIComparisonResult with improvements and percentages
         """
         if not self.api_key:
-            return {
-                "success": False,
-                "error": "API key not set",
-                "improvement_score": 0,
-                "comparison": ""
-            }
+            return AIComparisonResult(
+                improvements=[],
+                overall_improvement=0,
+                summary="API key not available",
+                success=False,
+                error_message="API key not set"
+            )
         
         try:
             client = self._get_client()
@@ -229,20 +240,29 @@ Respond in valid JSON format only:
             b64_original = self._encode_image(original)
             b64_processed = self._encode_image(processed)
             
-            prompt = """Compare these two versions of the same photograph.
-The first image is the original scanned photo, and the second is the processed/enhanced version.
+            prompt = """Compare the ORIGINAL image (first) with the PROCESSED image (second).
 
-Please evaluate:
-1. Has the processing improved the image quality? Score from -5 (worse) to +5 (much better)
-2. What specific improvements are visible?
-3. Are there any issues introduced by the processing?
+Your task is to identify and celebrate the IMPROVEMENTS made. Focus ONLY on positive changes.
+For each improvement, estimate the percentage improvement (10-100%).
+
+Evaluate these aspects:
+- Color accuracy (white balance, vibrancy, saturation)
+- Clarity and sharpness
+- Noise reduction
+- Contrast and exposure
+- Glare/reflection removal
+- Overall visual appeal
+
+IMPORTANT: Be enthusiastic and positive! Focus on what improved, not what could be better.
 
 Respond in JSON format:
 {
-    "improvement_score": 3,
-    "improvements": ["improvement1", "improvement2"],
-    "issues_introduced": ["issue1"],
-    "summary": "Brief overall comparison"
+    "improvements": [
+        {"aspect": "Color Balance", "percent": 35, "description": "Colors now appear more natural and vibrant"},
+        {"aspect": "Clarity", "percent": 25, "description": "Image is noticeably sharper with better detail"}
+    ],
+    "overall_percent": 40,
+    "summary": "A celebratory summary of the transformation (2-3 sentences, be positive!)"
 }"""
 
             response = client.messages.create(
@@ -253,7 +273,7 @@ Respond in JSON format:
                     "content": [
                         {
                             "type": "text",
-                            "text": "Original image:"
+                            "text": "ORIGINAL image:"
                         },
                         {
                             "type": "image",
@@ -265,7 +285,7 @@ Respond in JSON format:
                         },
                         {
                             "type": "text",
-                            "text": "Processed image:"
+                            "text": "PROCESSED image:"
                         },
                         {
                             "type": "image",
@@ -294,24 +314,31 @@ Respond in JSON format:
                     json_str = raw_text
                 
                 data = json.loads(json_str.strip())
-                data["success"] = True
-                data["raw_response"] = raw_text
-                return data
+                
+                return AIComparisonResult(
+                    improvements=data.get("improvements", []),
+                    overall_improvement=float(data.get("overall_percent", 0)),
+                    summary=data.get("summary", "Processing complete!"),
+                    success=True
+                )
                 
             except json.JSONDecodeError:
-                return {
-                    "success": True,
-                    "improvement_score": 0,
-                    "comparison": raw_text,
-                    "raw_response": raw_text
-                }
+                return AIComparisonResult(
+                    improvements=[],
+                    overall_improvement=0,
+                    summary=raw_text,
+                    success=True,
+                    error_message="Could not parse response"
+                )
                 
         except Exception as e:
-            return {
-                "success": False,
-                "error": str(e),
-                "improvement_score": 0
-            }
+            return AIComparisonResult(
+                improvements=[],
+                overall_improvement=0,
+                summary="Analysis failed",
+                success=False,
+                error_message=str(e)
+            )
     
     def get_enhancement_suggestions(self, image: np.ndarray, 
                                     current_settings: Dict[str, Any]) -> Dict[str, Any]:
@@ -470,8 +497,8 @@ YOUR TASK:
 ROTATION RULES:
 - Thick border currently at BOTTOM → 0° (correct, no rotation)
 - Thick border currently at TOP → 180° rotation
-- Thick border currently on LEFT side → 90° clockwise
-- Thick border currently on RIGHT side → 270° clockwise
+- Thick border currently on LEFT side → 270° clockwise
+- Thick border currently on RIGHT side → 90° clockwise
 
 VERIFICATION: After your proposed rotation, people should appear upright (not upside down or sideways).
 

@@ -930,16 +930,17 @@ def main():
                 
                 progress_bar.progress(90)
                 
-                # AI Analysis (if API key provided)
+                # AI Comparison Analysis (if API key provided)
                 if api_key:
-                    status_text.text("Running AI analysis...")
+                    status_text.text("Running AI comparison analysis...")
                     try:
                         ai_enhancer = AIEnhancer(api_key)
-                        ai_result = ai_enhancer.analyze_image(processed_image)
-                        if ai_result.success:
-                            st.session_state.ai_analysis = ai_result
+                        # Compare original vs processed to show improvements
+                        comparison_result = ai_enhancer.compare_images(original_image, processed_image)
+                        if comparison_result.success:
+                            st.session_state.ai_comparison = comparison_result
                     except Exception as e:
-                        st.warning(f"AI analysis failed: {e}")
+                        st.warning(f"AI comparison failed: {e}")
                 
                 progress_bar.progress(100)
                 status_text.text("Complete!")
@@ -979,30 +980,45 @@ def main():
                     fig = create_histogram_comparison(original_image, st.session_state.final_image)
                     st.plotly_chart(fig, width='stretch')
                 
-                # AI Analysis results
-                if hasattr(st.session_state, 'ai_analysis') and st.session_state.ai_analysis:
-                    st.markdown("---")
-                    st.markdown("### 🤖 AI Analysis")
+                # AI Comparison Results - Show Improvements
+                if hasattr(st.session_state, 'ai_comparison') and st.session_state.ai_comparison:
+                    comparison = st.session_state.ai_comparison
                     
-                    ai_result = st.session_state.ai_analysis
-                    
-                    col1, col2 = st.columns([1, 2])
-                    with col1:
-                        st.metric("AI Quality Score", f"{ai_result.quality_score}/10")
-                    
-                    with col2:
-                        st.markdown("**Detected Issues:**")
-                        for issue in ai_result.detected_issues:
-                            st.markdown(f"- {issue}")
+                    if comparison.success and comparison.improvements:
+                        st.markdown("---")
+                        st.markdown("### ✨ AI Analysis: Improvements Made")
                         
-                        if ai_result.recommendations:
-                            st.markdown("**Recommendations:**")
-                            for rec in ai_result.recommendations:
-                                st.markdown(f"- {rec}")
-                    
-                    if ai_result.description:
-                        st.markdown("**Image Description:**")
-                        st.info(ai_result.description)
+                        # Overall improvement metric
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            st.metric(
+                                "Overall Improvement", 
+                                f"+{comparison.overall_improvement:.0f}%",
+                                delta=f"{comparison.overall_improvement:.0f}% better"
+                            )
+                        
+                        with col2:
+                            # Summary
+                            st.success(f"🎉 {comparison.summary}")
+                        
+                        # Individual improvements with progress bars
+                        st.markdown("#### 📈 Detailed Improvements")
+                        
+                        for imp in comparison.improvements:
+                            aspect = imp.get('aspect', 'Quality')
+                            percent = imp.get('percent', 0)
+                            description = imp.get('description', '')
+                            
+                            col1, col2, col3 = st.columns([2, 1, 3])
+                            with col1:
+                                st.markdown(f"**{aspect}**")
+                            with col2:
+                                st.markdown(f"<span style='color: #4CAF50; font-weight: bold;'>+{percent}%</span>", unsafe_allow_html=True)
+                            with col3:
+                                st.progress(min(percent / 100, 1.0))
+                            
+                            if description:
+                                st.caption(f"↳ {description}")
                 
                 # Download all
                 st.markdown("---")
