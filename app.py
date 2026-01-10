@@ -590,7 +590,7 @@ def display_compression_results(compression_results: Dict[float, Dict],
     
     # Rate-distortion curve
     fig = plot_rate_distortion_curve(metrics_data, "Quality vs. File Size")
-    st.plotly_chart(fig, width='stretch')
+    st.plotly_chart(fig, use_container_width=True)
     
     # Compression cards
     st.markdown("#### Compression Options")
@@ -974,11 +974,11 @@ def main():
                         
                         # Processing timeline
                         fig = create_processing_timeline(st.session_state.pipeline_results)
-                        st.plotly_chart(fig, width='stretch')
+                        st.plotly_chart(fig, use_container_width=True)
                 
                 with tab3:
                     fig = create_histogram_comparison(original_image, st.session_state.final_image)
-                    st.plotly_chart(fig, width='stretch')
+                    st.plotly_chart(fig, use_container_width=True)
                 
                 # AI Comparison Results - Show Improvements
                 if hasattr(st.session_state, 'ai_comparison') and st.session_state.ai_comparison:
