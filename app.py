@@ -244,32 +244,7 @@ def process_image(image: np.ndarray, config: Dict[str, Any], api_key: str = None
     pipeline_results = []
     current_image = image.copy()
     
-    # Step 1: Glare Removal
-    if config.get('glare', {}).get('enabled', True):
-        try:
-            start_time = time.time()
-            glare_remover = GlareRemover(config.get('glare', {}))
-            result = glare_remover.process(current_image)
-            current_image = result.image
-            
-            pipeline_results.append({
-                'step': 'Glare Removal',
-                'time': time.time() - start_time,
-                'status': 'completed',
-                'details': f"Detected {result.regions_detected} regions ({result.coverage_percent:.1f}% coverage)",
-                'method': result.method_used,
-                'before': image.copy(),
-                'after': current_image.copy()
-            })
-        except Exception as e:
-            pipeline_results.append({
-                'step': 'Glare Removal',
-                'time': 0,
-                'status': 'error',
-                'details': str(e)
-            })
-    
-    # Step 2: Polaroid Content Crop (early in pipeline to process just the photo content)
+    # Step 1: Polaroid Content Crop (FIRST - extract photo content before any processing)
     if config.get('polaroid_crop', {}).get('enabled', False):
         try:
             start_time = time.time()
@@ -296,6 +271,33 @@ def process_image(image: np.ndarray, config: Dict[str, Any], api_key: str = None
         except Exception as e:
             pipeline_results.append({
                 'step': 'Polaroid Crop',
+                'time': 0,
+                'status': 'error',
+                'details': str(e)
+            })
+    
+    # Step 2: Glare Removal
+    if config.get('glare', {}).get('enabled', True):
+        try:
+            start_time = time.time()
+            glare_remover = GlareRemover(config.get('glare', {}))
+            result = glare_remover.process(current_image)
+            
+            before_glare = current_image.copy()
+            current_image = result.image
+            
+            pipeline_results.append({
+                'step': 'Glare Removal',
+                'time': time.time() - start_time,
+                'status': 'completed',
+                'details': f"Detected {result.regions_detected} regions ({result.coverage_percent:.1f}% coverage)",
+                'method': result.method_used,
+                'before': before_glare,
+                'after': current_image.copy()
+            })
+        except Exception as e:
+            pipeline_results.append({
+                'step': 'Glare Removal',
                 'time': 0,
                 'status': 'error',
                 'details': str(e)

@@ -637,114 +637,128 @@ class PolaroidCropper:
         """
         STRICT white border detection specifically designed for polaroid frames.
         
-        This method uses multiple passes to reliably find white borders:
-        1. First pass: strict white detection (high brightness, low saturation)
-        2. Second pass: brightness gradient detection (find sharp transition)
-        3. Validation: ensure we have a polaroid-like frame structure
-        
-        Returns coordinates that crop to the INNER edge of the white border.
+        Polaroids have asymmetric borders - the signature strip (thick border) is 
+        typically 2-3x wider than the other three borders. This method:
+        1. Detects all white borders
+        2. Identifies the thick border (signature strip)
+        3. Crops to the INNER content, excluding all white borders completely
         """
         h, w = image.shape[:2]
         
-        # More lenient threshold to catch slightly off-white borders
-        white_threshold = max(180, self.config["white_threshold"] - 30)
-        min_border = int(min(h, w) * 0.02)  # At least 2% of image dimension
-        
-        # Convert to HSV for saturation analysis
+        # Convert to HSV for better white detection
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         saturation = hsv[:, :, 1]
         value = hsv[:, :, 2]
         
-        # Use value channel (brightness) which is often more reliable than gray
-        # Create white mask: high value AND low saturation
-        white_mask = (value > white_threshold) & (saturation < 60)
+        # White detection: high brightness AND low saturation
+        # Use adaptive threshold based on border samples
+        border_sample_size = min(h, w) // 8
         
-        # Morphological cleanup to remove noise
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+        # Sample corners to estimate white threshold
+        corners = [
+            value[:border_sample_size, :border_sample_size],
+            value[:border_sample_size, -border_sample_size:],
+            value[-border_sample_size:, :border_sample_size],
+            value[-border_sample_size:, -border_sample_size:]
+        ]
+        corner_brightness = np.mean([np.mean(c) for c in corners])
+        
+        # Adaptive threshold - if corners are bright, they're likely white borders
+        white_threshold = max(160, min(200, corner_brightness - 20))
+        
+        # Create white mask
+        white_mask = (value > white_threshold) & (saturation < 70)
+        
+        # Morphological cleanup
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
         white_mask = cv2.morphologyEx(white_mask.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
         white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel)
         
-        # Find boundaries by scanning from each edge
-        # We're looking for where WHITE ENDS (content begins)
+        # Scan from each edge to find where content begins
+        # Use stricter criteria - look for significant non-white content
         
-        # LEFT: scan columns from left, find where white drops below threshold
+        # LEFT boundary
         left_boundary = 0
         for col in range(min(w // 2, w)):
             col_white_ratio = np.mean(white_mask[:, col])
-            # Also check brightness drop
             col_brightness = np.mean(value[:, col])
-            if col_white_ratio < 0.3 or col_brightness < white_threshold - 40:
+            col_saturation = np.mean(saturation[:, col])
+            # Content has lower brightness OR higher saturation (color)
+            if col_white_ratio < 0.4 and (col_brightness < white_threshold - 30 or col_saturation > 40):
                 left_boundary = col
                 break
         
-        # RIGHT: scan from right edge
+        # RIGHT boundary
         right_boundary = w
         for col in range(w - 1, max(w // 2, 0), -1):
             col_white_ratio = np.mean(white_mask[:, col])
             col_brightness = np.mean(value[:, col])
-            if col_white_ratio < 0.3 or col_brightness < white_threshold - 40:
+            col_saturation = np.mean(saturation[:, col])
+            if col_white_ratio < 0.4 and (col_brightness < white_threshold - 30 or col_saturation > 40):
                 right_boundary = col
                 break
         
-        # TOP: scan rows from top
+        # TOP boundary
         top_boundary = 0
         for row in range(min(h // 2, h)):
             row_white_ratio = np.mean(white_mask[row, :])
             row_brightness = np.mean(value[row, :])
-            if row_white_ratio < 0.3 or row_brightness < white_threshold - 40:
+            row_saturation = np.mean(saturation[row, :])
+            if row_white_ratio < 0.4 and (row_brightness < white_threshold - 30 or row_saturation > 40):
                 top_boundary = row
                 break
         
-        # BOTTOM: scan from bottom
+        # BOTTOM boundary - scan more aggressively for the thick border
         bottom_boundary = h
         for row in range(h - 1, max(h // 2, 0), -1):
             row_white_ratio = np.mean(white_mask[row, :])
             row_brightness = np.mean(value[row, :])
-            if row_white_ratio < 0.3 or row_brightness < white_threshold - 40:
+            row_saturation = np.mean(saturation[row, :])
+            if row_white_ratio < 0.4 and (row_brightness < white_threshold - 30 or row_saturation > 40):
                 bottom_boundary = row
                 break
         
-        # Validate the detected boundaries
-        content_width = right_boundary - left_boundary
-        content_height = bottom_boundary - top_boundary
-        
-        # Check if we found meaningful borders
+        # Calculate border widths
         border_left = left_boundary
         border_right = w - right_boundary
         border_top = top_boundary
         border_bottom = h - bottom_boundary
         
-        has_left_border = border_left > min_border
-        has_right_border = border_right > min_border
-        has_top_border = border_top > min_border
-        has_bottom_border = border_bottom > min_border
+        # Identify the thick border (signature strip) - it should be significantly larger
+        borders = {'left': border_left, 'right': border_right, 'top': border_top, 'bottom': border_bottom}
+        max_border = max(borders.values())
+        min_meaningful_border = min(h, w) * 0.02
         
-        borders_found = sum([has_left_border, has_right_border, has_top_border, has_bottom_border])
-        
-        # Need at least 2 borders for a polaroid frame
-        if borders_found < 2:
+        # Check we have at least some borders
+        meaningful_borders = sum(1 for b in borders.values() if b > min_meaningful_border)
+        if meaningful_borders < 2:
             return None
         
-        # Content must be reasonable size
-        if content_width < w * 0.25 or content_height < h * 0.25:
+        # Content dimensions
+        content_width = right_boundary - left_boundary
+        content_height = bottom_boundary - top_boundary
+        
+        if content_width < w * 0.2 or content_height < h * 0.2:
             return None
         
         if content_width > w * 0.98 or content_height > h * 0.98:
             return None
         
-        # Add small inward margin to ensure no white edge remains
-        inward_margin = max(3, int(min(h, w) * 0.005))  # 0.5% or at least 3px
+        # Add inward margin to ensure clean crop (no white remnants)
+        # Use larger margin for the thick border side
+        base_margin = max(5, int(min(h, w) * 0.008))  # 0.8% minimum
         
-        x = min(w - 10, left_boundary + inward_margin)
-        y = min(h - 10, top_boundary + inward_margin)
-        cw = max(10, content_width - 2 * inward_margin)
-        ch = max(10, content_height - 2 * inward_margin)
+        # Apply margins - slightly larger to ensure no white edges
+        x = left_boundary + base_margin
+        y = top_boundary + base_margin
+        cw = content_width - 2 * base_margin
+        ch = content_height - 2 * base_margin
         
-        # Final bounds check
-        if x + cw > w:
-            cw = w - x
-        if y + ch > h:
-            ch = h - y
+        # Bounds check
+        x = max(0, min(w - 20, x))
+        y = max(0, min(h - 20, y))
+        cw = max(20, min(w - x, cw))
+        ch = max(20, min(h - y, ch))
         
         return (x, y, cw, ch)
     
@@ -752,87 +766,97 @@ class PolaroidCropper:
         """
         Detect white borders using gradient analysis at border transitions.
         
-        Looks for sharp brightness drops indicating the transition from 
-        white border to photo content. This is robust when borders aren't
-        perfectly uniform.
+        Uses cumulative brightness tracking to find where the white border
+        transitions to photo content. Works well for thick borders.
         """
         h, w = image.shape[:2]
         
-        # Use HSV value channel for more reliable brightness
+        # Use HSV for saturation check as well
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+        saturation = hsv[:, :, 1]
         value = hsv[:, :, 2]
         
-        # Calculate brightness profiles
-        # LEFT: column means from left edge
+        # Estimate white threshold from edges
+        edge_brightness = np.mean([
+            np.mean(value[:, :10]),
+            np.mean(value[:, -10:]),
+            np.mean(value[:10, :]),
+            np.mean(value[-10:, :])
+        ])
+        white_threshold = max(150, edge_brightness - 30)
+        
+        # LEFT boundary - find where bright white ends
         left_boundary = 0
-        prev_brightness = np.mean(value[:, 0])
-        for col in range(1, min(w // 2, w)):
-            curr_brightness = np.mean(value[:, col])
-            brightness_drop = prev_brightness - curr_brightness
+        for col in range(min(w // 2, w)):
+            col_brightness = np.mean(value[:, col])
+            col_saturation = np.mean(saturation[:, col])
             
-            # Look for significant brightness drop (border -> content transition)
-            if brightness_drop > 25 or curr_brightness < 150:
+            # White ends when brightness drops significantly OR saturation increases
+            if col_brightness < white_threshold - 20 or col_saturation > 50:
                 left_boundary = col
                 break
-            prev_brightness = curr_brightness
         
-        # RIGHT: from right edge
+        # RIGHT boundary
         right_boundary = w
-        prev_brightness = np.mean(value[:, w - 1])
-        for col in range(w - 2, max(w // 2, 0), -1):
-            curr_brightness = np.mean(value[:, col])
-            brightness_drop = prev_brightness - curr_brightness
+        for col in range(w - 1, max(w // 2, 0), -1):
+            col_brightness = np.mean(value[:, col])
+            col_saturation = np.mean(saturation[:, col])
             
-            if brightness_drop > 25 or curr_brightness < 150:
+            if col_brightness < white_threshold - 20 or col_saturation > 50:
                 right_boundary = col
                 break
-            prev_brightness = curr_brightness
         
-        # TOP: from top edge
+        # TOP boundary
         top_boundary = 0
-        prev_brightness = np.mean(value[0, :])
-        for row in range(1, min(h // 2, h)):
-            curr_brightness = np.mean(value[row, :])
-            brightness_drop = prev_brightness - curr_brightness
+        for row in range(min(h // 2, h)):
+            row_brightness = np.mean(value[row, :])
+            row_saturation = np.mean(saturation[row, :])
             
-            if brightness_drop > 25 or curr_brightness < 150:
+            if row_brightness < white_threshold - 20 or row_saturation > 50:
                 top_boundary = row
                 break
-            prev_brightness = curr_brightness
         
-        # BOTTOM: from bottom edge
+        # BOTTOM boundary - likely the thick border, be thorough
         bottom_boundary = h
-        prev_brightness = np.mean(value[h - 1, :])
-        for row in range(h - 2, max(h // 2, 0), -1):
-            curr_brightness = np.mean(value[row, :])
-            brightness_drop = prev_brightness - curr_brightness
+        for row in range(h - 1, max(h // 2, 0), -1):
+            row_brightness = np.mean(value[row, :])
+            row_saturation = np.mean(saturation[row, :])
             
-            if brightness_drop > 25 or curr_brightness < 150:
+            if row_brightness < white_threshold - 20 or row_saturation > 50:
                 bottom_boundary = row
                 break
-            prev_brightness = curr_brightness
         
         # Validate
         content_width = right_boundary - left_boundary
         content_height = bottom_boundary - top_boundary
         
         min_border = int(min(h, w) * 0.02)
-        has_borders = (left_boundary > min_border or (w - right_boundary) > min_border or 
-                       top_boundary > min_border or (h - bottom_boundary) > min_border)
+        border_left = left_boundary
+        border_right = w - right_boundary
+        border_top = top_boundary
+        border_bottom = h - bottom_boundary
         
-        if not has_borders:
+        meaningful_borders = sum(1 for b in [border_left, border_right, border_top, border_bottom] if b > min_border)
+        
+        if meaningful_borders < 2:
             return None
         
-        if content_width < w * 0.25 or content_height < h * 0.25:
+        if content_width < w * 0.2 or content_height < h * 0.2:
             return None
         
-        # Inward margin to crop cleanly inside the border
-        inward_margin = max(3, int(min(h, w) * 0.005))
+        # Apply margin to ensure clean crop
+        margin = max(5, int(min(h, w) * 0.008))
         
-        x = min(w - 10, left_boundary + inward_margin)
-        y = min(h - 10, top_boundary + inward_margin)
-        cw = max(10, content_width - 2 * inward_margin)
-        ch = max(10, content_height - 2 * inward_margin)
+        x = max(0, left_boundary + margin)
+        y = max(0, top_boundary + margin)
+        cw = max(20, content_width - 2 * margin)
+        ch = max(20, content_height - 2 * margin)
+        
+        # Bounds check
+        if x + cw > w:
+            cw = w - x
+        if y + ch > h:
+            ch = h - y
         
         return (x, y, cw, ch)
     
