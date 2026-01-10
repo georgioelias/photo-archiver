@@ -451,48 +451,39 @@ class OrientationDetector:
             client = self._get_client()
             b64_image = self._encode_image(image)
             
-            prompt = """You are analyzing a POLAROID photograph to determine its correct orientation.
+            prompt = """Analyze this POLAROID photo to determine if it needs rotation.
 
-CRITICAL RULE: Polaroids have ONE distinctive thick white border (the "signature strip") that MUST be at the BOTTOM when correctly oriented.
+POLAROID RULE: The thick white border (signature strip) must be at the BOTTOM.
 
-STEP-BY-STEP ANALYSIS (do this carefully):
+DIRECTIONS IN THE IMAGE:
+- TOP = upper edge of the image as you're viewing it now
+- BOTTOM = lower edge of the image as you're viewing it now  
+- LEFT = left side of the image as you're viewing it now
+- RIGHT = right side of the image as you're viewing it now
 
-STEP 1: Identify all four white borders of the polaroid frame.
+YOUR TASK:
+1. Find the polaroid frame's four white borders
+2. One border is MUCH THICKER (2-3x wider) than the other three - this is the signature strip
+3. Tell me which edge of the IMAGE (top/bottom/left/right) this thick border is on RIGHT NOW
+4. Calculate rotation to move it to the bottom
 
-STEP 2: MEASURE the relative width of each border:
-- Look at the TOP edge of the polaroid - how thick is the white border there?
-- Look at the BOTTOM edge - how thick is that white border?
-- Look at the LEFT edge - how thick?
-- Look at the RIGHT edge - how thick?
+ROTATION RULES:
+- Thick border currently at BOTTOM → 0° (correct, no rotation)
+- Thick border currently at TOP → 180° rotation
+- Thick border currently on LEFT side → 90° clockwise
+- Thick border currently on RIGHT side → 270° clockwise
 
-STEP 3: Identify which ONE border is SIGNIFICANTLY THICKER than the others.
-- The thick border is typically 2-3x wider than the thin borders
-- It's where people write notes/dates on polaroids
-- The three thin borders are roughly equal width
+VERIFICATION: After your proposed rotation, people should appear upright (not upside down or sideways).
 
-STEP 4: WHERE is the thick border currently located in the image?
-- TOP of the image?
-- BOTTOM of the image?
-- LEFT side of the image?
-- RIGHT side of the image?
-
-STEP 5: Determine rotation needed to move thick border to BOTTOM:
-- Thick border at BOTTOM → 0° (already correct)
-- Thick border at TOP → 180° rotation needed
-- Thick border on LEFT → 90° clockwise rotation needed
-- Thick border on RIGHT → 270° clockwise rotation needed
-
-ALSO CHECK: Are people upside down? Is text upside down? This confirms your border analysis.
-
-Respond in JSON format:
+JSON response only:
 {
-    "thick_border_current_location": "top/bottom/left/right",
-    "border_width_analysis": "Brief description of which border is thickest",
-    "people_orientation": "upright/upside_down/sideways/no_people",
+    "thick_border_location": "top/bottom/left/right",
+    "border_analysis": "Which edge has the thick border and why",
+    "people_check": "upright/upside_down/sideways_left/sideways_right/no_people",
     "needs_rotation": true/false,
     "rotation_degrees": 0/90/180/270,
     "confidence": "high/medium/low",
-    "description": "Explanation of your analysis"
+    "reasoning": "Your complete analysis"
 }"""
 
             response = client.messages.create(
@@ -530,16 +521,16 @@ Respond in JSON format:
                 data = json.loads(json_str.strip())
                 
                 # Build detailed description from analysis
-                thick_loc = data.get("thick_border_current_location", "unknown")
-                border_analysis = data.get("border_width_analysis", "")
-                people_orient = data.get("people_orientation", "")
-                base_desc = data.get("description", "")
+                thick_loc = data.get("thick_border_location", "unknown")
+                border_analysis = data.get("border_analysis", "")
+                people_check = data.get("people_check", "")
+                reasoning = data.get("reasoning", "")
                 
                 description = f"Thick border at {thick_loc}. {border_analysis}"
-                if people_orient and people_orient != "no_people":
-                    description += f" People are {people_orient}."
-                if base_desc:
-                    description += f" {base_desc}"
+                if people_check and people_check != "no_people":
+                    description += f" People appear {people_check}."
+                if reasoning:
+                    description += f" {reasoning}"
                 
                 return OrientationResult(
                     needs_rotation=data.get("needs_rotation", False),

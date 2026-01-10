@@ -269,93 +269,7 @@ def process_image(image: np.ndarray, config: Dict[str, Any], api_key: str = None
                 'details': str(e)
             })
     
-    # Step 2: Perspective Correction
-    if config.get('perspective', {}).get('enabled', True):
-        try:
-            start_time = time.time()
-            perspective_corrector = PerspectiveCorrector(config.get('perspective', {}))
-            result = perspective_corrector.process(current_image)
-            
-            before_perspective = current_image.copy()
-            current_image = result.image
-            
-            pipeline_results.append({
-                'step': 'Perspective Correction',
-                'time': time.time() - start_time,
-                'status': 'completed',
-                'details': f"Method: {result.method_used}, Confidence: {result.confidence:.2f}",
-                'method': result.method_used,
-                'before': before_perspective,
-                'after': current_image.copy()
-            })
-        except Exception as e:
-            pipeline_results.append({
-                'step': 'Perspective Correction',
-                'time': 0,
-                'status': 'error',
-                'details': str(e)
-            })
-    
-    # Step 3: Color Correction
-    if config.get('color', {}).get('enabled', True):
-        try:
-            start_time = time.time()
-            color_corrector = ColorCorrector(config.get('color', {}))
-            result = color_corrector.process(current_image)
-            
-            before_color = current_image.copy()
-            current_image = result.image
-            
-            pipeline_results.append({
-                'step': 'Color Correction',
-                'time': time.time() - start_time,
-                'status': 'completed',
-                'details': f"WB: {result.white_balance_method}, Cast removed: {result.color_cast_corrected}",
-                'method': result.white_balance_method,
-                'before': before_color,
-                'after': current_image.copy()
-            })
-        except Exception as e:
-            pipeline_results.append({
-                'step': 'Color Correction',
-                'time': 0,
-                'status': 'error',
-                'details': str(e)
-            })
-    
-    # Step 4: Enhancement (AI-powered recommendations)
-    if config.get('enhancement', {}).get('enabled', True):
-        try:
-            start_time = time.time()
-            enhancer = ImageEnhancer(config.get('enhancement', {}))
-            result = enhancer.process(current_image, api_key=api_key)
-            
-            before_enhance = current_image.copy()
-            current_image = result.image
-            
-            # Build details string
-            details = f"Denoise: {result.denoise_applied}, Sharpen: {result.sharpen_applied}"
-            if result.ai_recommendations:
-                details += f" | AI: {result.ai_recommendations}"
-            
-            pipeline_results.append({
-                'step': 'Enhancement',
-                'time': time.time() - start_time,
-                'status': 'completed',
-                'details': details,
-                'method': f"D:{result.denoise_applied} S:{result.sharpen_applied}",
-                'before': before_enhance,
-                'after': current_image.copy()
-            })
-        except Exception as e:
-            pipeline_results.append({
-                'step': 'Enhancement',
-                'time': 0,
-                'status': 'error',
-                'details': str(e)
-            })
-    
-    # Step 5: Polaroid Content Crop (optional)
+    # Step 2: Polaroid Content Crop (early in pipeline to process just the photo content)
     if config.get('polaroid_crop', {}).get('enabled', False):
         try:
             start_time = time.time()
@@ -382,6 +296,92 @@ def process_image(image: np.ndarray, config: Dict[str, Any], api_key: str = None
         except Exception as e:
             pipeline_results.append({
                 'step': 'Polaroid Crop',
+                'time': 0,
+                'status': 'error',
+                'details': str(e)
+            })
+    
+    # Step 3: Perspective Correction
+    if config.get('perspective', {}).get('enabled', True):
+        try:
+            start_time = time.time()
+            perspective_corrector = PerspectiveCorrector(config.get('perspective', {}))
+            result = perspective_corrector.process(current_image)
+            
+            before_perspective = current_image.copy()
+            current_image = result.image
+            
+            pipeline_results.append({
+                'step': 'Perspective Correction',
+                'time': time.time() - start_time,
+                'status': 'completed',
+                'details': f"Method: {result.method_used}, Confidence: {result.confidence:.2f}",
+                'method': result.method_used,
+                'before': before_perspective,
+                'after': current_image.copy()
+            })
+        except Exception as e:
+            pipeline_results.append({
+                'step': 'Perspective Correction',
+                'time': 0,
+                'status': 'error',
+                'details': str(e)
+            })
+    
+    # Step 4: Color Correction
+    if config.get('color', {}).get('enabled', True):
+        try:
+            start_time = time.time()
+            color_corrector = ColorCorrector(config.get('color', {}))
+            result = color_corrector.process(current_image)
+            
+            before_color = current_image.copy()
+            current_image = result.image
+            
+            pipeline_results.append({
+                'step': 'Color Correction',
+                'time': time.time() - start_time,
+                'status': 'completed',
+                'details': f"WB: {result.white_balance_method}, Cast removed: {result.color_cast_corrected}",
+                'method': result.white_balance_method,
+                'before': before_color,
+                'after': current_image.copy()
+            })
+        except Exception as e:
+            pipeline_results.append({
+                'step': 'Color Correction',
+                'time': 0,
+                'status': 'error',
+                'details': str(e)
+            })
+    
+    # Step 5: Enhancement (AI-powered recommendations)
+    if config.get('enhancement', {}).get('enabled', True):
+        try:
+            start_time = time.time()
+            enhancer = ImageEnhancer(config.get('enhancement', {}))
+            result = enhancer.process(current_image, api_key=api_key)
+            
+            before_enhance = current_image.copy()
+            current_image = result.image
+            
+            # Build details string
+            details = f"Denoise: {result.denoise_applied}, Sharpen: {result.sharpen_applied}"
+            if result.ai_recommendations:
+                details += f" | AI: {result.ai_recommendations}"
+            
+            pipeline_results.append({
+                'step': 'Enhancement',
+                'time': time.time() - start_time,
+                'status': 'completed',
+                'details': details,
+                'method': f"D:{result.denoise_applied} S:{result.sharpen_applied}",
+                'before': before_enhance,
+                'after': current_image.copy()
+            })
+        except Exception as e:
+            pipeline_results.append({
+                'step': 'Enhancement',
                 'time': 0,
                 'status': 'error',
                 'details': str(e)
