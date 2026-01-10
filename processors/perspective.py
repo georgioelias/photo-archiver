@@ -712,6 +712,7 @@ class PolaroidCropper:
     def _extract_content_from_polaroid_region(self, image: np.ndarray, polaroid_corners: np.ndarray) -> Optional[Tuple[int, int, int, int]]:
         """
         Given the corners of a polaroid frame, extract the inner photo content.
+        Crops right at the INNER edge of the white border - no white should remain.
         
         Args:
             image: Original image
@@ -737,61 +738,65 @@ class PolaroidCropper:
         # Extract the polaroid region
         polaroid_region = image[y:y+ph, x:x+pw]
         
-        # Now find the inner content within this polaroid
-        # Convert to HSV
+        # Convert to HSV for analysis
         hsv = cv2.cvtColor(polaroid_region, cv2.COLOR_BGR2HSV)
         sat = hsv[:, :, 1]
         val = hsv[:, :, 2]
         
-        # The white border has high value and low saturation
-        # The photo content has more saturation (colors) or lower value (darker)
-        
         rh, rw = polaroid_region.shape[:2]
         
-        # Scan from each side to find where white border ends
-        # LEFT
+        # More aggressive detection - look for DEFINITE content (not just "maybe not white")
+        # White border: val > 200, sat < 30
+        # Content: val < 200 OR sat > 40
+        
+        # Helper: check if a line is definitely content (not white border)
+        def is_content_column(col_idx):
+            col_sat = np.percentile(sat[:, col_idx], 50)  # Median
+            col_val = np.percentile(val[:, col_idx], 50)
+            # Content if median saturation is notable OR brightness is lower
+            return col_sat > 40 or col_val < 190
+        
+        def is_content_row(row_idx):
+            row_sat = np.percentile(sat[row_idx, :], 50)
+            row_val = np.percentile(val[row_idx, :], 50)
+            return row_sat > 40 or row_val < 190
+        
+        # LEFT - scan until we find definite content
         left = 0
         for col in range(rw // 2):
-            col_sat = np.mean(sat[:, col])
-            col_val = np.mean(val[:, col])
-            # Content starts when saturation increases OR brightness drops significantly
-            if col_sat > 30 or col_val < 180:
+            if is_content_column(col):
                 left = col
                 break
         
         # RIGHT
         right = rw
         for col in range(rw - 1, rw // 2, -1):
-            col_sat = np.mean(sat[:, col])
-            col_val = np.mean(val[:, col])
-            if col_sat > 30 or col_val < 180:
-                right = col
+            if is_content_column(col):
+                right = col + 1  # Include this column
                 break
         
         # TOP
         top = 0
         for row in range(rh // 2):
-            row_sat = np.mean(sat[row, :])
-            row_val = np.mean(val[row, :])
-            if row_sat > 30 or row_val < 180:
+            if is_content_row(row):
                 top = row
                 break
         
-        # BOTTOM (thick border - need to be more aggressive)
+        # BOTTOM (thick border)
         bottom = rh
         for row in range(rh - 1, rh // 2, -1):
-            row_sat = np.mean(sat[row, :])
-            row_val = np.mean(val[row, :])
-            if row_sat > 30 or row_val < 180:
-                bottom = row
+            if is_content_row(row):
+                bottom = row + 1  # Include this row
                 break
         
-        # Add small margin inward
-        margin = max(3, int(min(rw, rh) * 0.01))
-        left += margin
-        right -= margin
-        top += margin
-        bottom -= margin
+        # Add extra inward margin to ensure NO white remnants
+        # This is aggressive - we'd rather lose a pixel of content than keep white
+        inward_margin = max(8, int(min(rw, rh) * 0.015))  # 1.5% or at least 8px
+        
+        left += inward_margin
+        right -= inward_margin
+        top += inward_margin
+        bottom -= inward_margin
         
         # Calculate final crop coordinates in original image space
         final_x = x + left
@@ -823,41 +828,49 @@ class PolaroidCropper:
                 return result
         
         # Fallback: Maybe the polaroid fills most of the frame (scan/screenshot)
-        # Use direct border scanning
+        # Use direct border scanning with aggressive content detection
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         sat = hsv[:, :, 1]
         val = hsv[:, :, 2]
         
+        # Use median to detect definite content (not just average)
+        def is_content_col(col_idx):
+            return np.percentile(sat[:, col_idx], 50) > 40 or np.percentile(val[:, col_idx], 50) < 190
+        
+        def is_content_row(row_idx):
+            return np.percentile(sat[row_idx, :], 50) > 40 or np.percentile(val[row_idx, :], 50) < 190
+        
         # Scan from edges
         left = 0
         for col in range(w // 3):
-            if np.mean(sat[:, col]) > 25 or np.mean(val[:, col]) < 170:
+            if is_content_col(col):
                 left = col
                 break
         
         right = w
         for col in range(w - 1, 2 * w // 3, -1):
-            if np.mean(sat[:, col]) > 25 or np.mean(val[:, col]) < 170:
-                right = col
+            if is_content_col(col):
+                right = col + 1
                 break
         
         top = 0
         for row in range(h // 3):
-            if np.mean(sat[row, :]) > 25 or np.mean(val[row, :]) < 170:
+            if is_content_row(row):
                 top = row
                 break
         
         bottom = h
         for row in range(h - 1, 2 * h // 3, -1):
-            if np.mean(sat[row, :]) > 25 or np.mean(val[row, :]) < 170:
-                bottom = row
+            if is_content_row(row):
+                bottom = row + 1
                 break
         
         # Validate we found borders
         if left < 5 and right > w - 5 and top < 5 and bottom > h - 5:
             return None  # No borders found
         
-        margin = max(3, int(min(h, w) * 0.005))
+        # Aggressive inward margin to ensure clean crop
+        margin = max(8, int(min(h, w) * 0.015))
         x = left + margin
         y = top + margin
         cw = (right - left) - 2 * margin
